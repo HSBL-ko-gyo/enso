@@ -102,6 +102,7 @@
     box-shadow:0 0 28px rgba(255,122,47,.18) inset}
   .btn:focus-visible{outline:2px solid var(--gold);outline-offset:3px}
   .btn[aria-pressed="true"]{border-color:rgba(255,198,107,.7);color:var(--gold)}
+  .btn:disabled{cursor:not-allowed;color:rgba(154,143,134,.45);border-color:rgba(154,143,134,.16)}
 
   @media (prefers-reduced-motion: reduce){ .ui{transition:none} }
   @media (max-width:560px){
@@ -163,6 +164,7 @@
       <button class="btn" id="auto" aria-pressed="false">自動でくべる OFF</button>
       <button class="btn" id="star" aria-pressed="true">星 ON</button>
       <button class="btn" id="sound" aria-pressed="false">音 OFF</button>
+      <button class="btn" id="awake" aria-pressed="false">画面維持 OFF</button>
       <input type="file" id="fileInput" multiple style="display:none">
     </div>
   </footer>
@@ -1361,8 +1363,36 @@ placeInitialLog( -2, -0.05, false, 0, 0);
 frame();
 
 /* ---------- 入力 ---------- */
+let tapCandidate=null;
 canvas.addEventListener('pointerdown', e=>{
-  dropLog(e.clientX, e.clientY);
+  if(!e.isPrimary) return;
+  cursor.x=e.clientX; cursor.y=e.clientY;
+  tapCandidate={
+    id:e.pointerId,
+    type:e.pointerType,
+    x:e.clientX,
+    y:e.clientY,
+    t:performance.now(),
+    moved:false
+  };
+  try{ canvas.setPointerCapture(e.pointerId); }catch(_){}
+});
+canvas.addEventListener('pointermove', e=>{
+  if(!tapCandidate || e.pointerId!==tapCandidate.id) return;
+  const dx=e.clientX-tapCandidate.x, dy=e.clientY-tapCandidate.y;
+  if(Math.hypot(dx,dy)>10) tapCandidate.moved=true;
+});
+canvas.addEventListener('pointerup', e=>{
+  if(!tapCandidate || e.pointerId!==tapCandidate.id) return;
+  const held=performance.now()-tapCandidate.t;
+  const isTouchLike=tapCandidate.type==='touch' || tapCandidate.type==='pen';
+  if(!tapCandidate.moved && (!isTouchLike || held<520)){
+    dropLog(e.clientX, e.clientY);
+  }
+  tapCandidate=null;
+});
+canvas.addEventListener('pointercancel', ()=>{
+  tapCandidate=null;
 });
 
 /* ドラッグ＆ドロップ：落とした位置からファイルが落下 */
@@ -1499,6 +1529,52 @@ soundBtn.addEventListener('click',async e=>{
     roarGain.gain.linearRampToValueAtTime(0, now+0.5);
   }
 });
+
+/* ---------- 画面維持 ---------- */
+const awakeBtn=document.getElementById('awake');
+let wakeLock=null, keepAwake=false;
+async function requestScreenWake(){
+  if(!('wakeLock' in navigator)) return false;
+  try{
+    wakeLock=await navigator.wakeLock.request('screen');
+    wakeLock.addEventListener('release',()=>{
+      wakeLock=null;
+      updateAwakeButton();
+    });
+    return true;
+  }catch(_){
+    wakeLock=null;
+    return false;
+  }
+}
+function updateAwakeButton(){
+  awakeBtn.textContent = keepAwake && wakeLock ? '画面維持 ON' : '画面維持 OFF';
+  awakeBtn.setAttribute('aria-pressed', keepAwake && wakeLock);
+}
+if(!('wakeLock' in navigator)){
+  awakeBtn.textContent='画面維持不可';
+  awakeBtn.disabled=true;
+  awakeBtn.title='このブラウザは画面維持に対応していません';
+}else{
+  awakeBtn.addEventListener('click',async e=>{
+    e.stopPropagation();
+    keepAwake=!keepAwake;
+    if(keepAwake){
+      const ok=await requestScreenWake();
+      keepAwake=ok;
+    }else if(wakeLock){
+      await wakeLock.release();
+      wakeLock=null;
+    }
+    updateAwakeButton();
+  });
+  document.addEventListener('visibilitychange',async ()=>{
+    if(keepAwake && document.visibilityState==='visible' && !wakeLock){
+      await requestScreenWake();
+      updateAwakeButton();
+    }
+  });
+}
 
 /* ---------- 時計とUIの自動フェード ---------- */
 const clock=document.getElementById('clock');
