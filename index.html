@@ -41,11 +41,14 @@
     transition:opacity 1.2s ease;
   }
   .ui.hidden{opacity:0}
-  .affiliate{
+  .affiliate-list{
     position:absolute;top:clamp(20px,4vw,48px);left:clamp(20px,4vw,48px);
-    pointer-events:auto;display:grid;grid-template-columns:54px minmax(0,148px);
+    pointer-events:auto;display:flex;flex-direction:column;gap:8px;
+  }
+  .affiliate{
+    position:relative;pointer-events:auto;display:grid;grid-template-columns:54px minmax(0,148px);
     align-items:center;gap:10px;text-decoration:none;color:rgba(239,230,218,.78);
-    max-width:224px;padding:8px 10px 8px 8px;border:1px solid rgba(239,230,218,.14);
+    width:224px;max-width:224px;padding:8px 10px 8px 8px;border:1px solid rgba(239,230,218,.14);
     border-radius:8px;background:rgba(7,6,8,.28);backdrop-filter:blur(7px);
     transition:.35s;
   }
@@ -102,7 +105,8 @@
 
   @media (prefers-reduced-motion: reduce){ .ui{transition:none} }
   @media (max-width:560px){
-    .affiliate{grid-template-columns:44px;max-width:64px;padding:6px;gap:0}
+    .affiliate-list{gap:6px}
+    .affiliate{grid-template-columns:44px;width:64px;max-width:64px;padding:6px;gap:0}
     .affiliate::after{
       content:"Amazon広告";position:absolute;left:5px;bottom:5px;
       padding:2px 4px;border-radius:4px;background:rgba(7,6,8,.72);
@@ -122,13 +126,22 @@
 <canvas id="scene" aria-label="焚き火のアニメーション"></canvas>
 
 <div class="ui" id="ui">
-  <a class="affiliate" href="https://amzn.to/3QjLoyR" target="_blank" rel="sponsored noopener" aria-label="Amazonアフィリエイトリンク: 焚き火ぬいぐるみを見る">
-    <img src="https://m.media-amazon.com/images/I/716zf4Z-9xL._AC_SY300_SX300_QL70_ML2_.jpg" alt="焚き火ぬいぐるみ">
-    <span>
-      <span class="affiliate-title">焚き火ぬいぐるみ</span>
-      <span class="affiliate-note">PR / Amazonアフィリエイト</span>
-    </span>
-  </a>
+  <div class="affiliate-list" aria-label="Amazonアフィリエイトリンク">
+    <a class="affiliate" href="https://amzn.to/3QjLoyR" target="_blank" rel="sponsored noopener" aria-label="Amazonアフィリエイトリンク: 焚き火ぬいぐるみを見る">
+      <img src="https://m.media-amazon.com/images/I/716zf4Z-9xL._AC_SY300_SX300_QL70_ML2_.jpg" alt="焚き火ぬいぐるみ">
+      <span>
+        <span class="affiliate-title">焚き火ぬいぐるみ</span>
+        <span class="affiliate-note">PR / Amazonアフィリエイト</span>
+      </span>
+    </a>
+    <a class="affiliate" href="https://amzn.to/4eAA5Kr" target="_blank" rel="sponsored noopener" aria-label="Amazonアフィリエイトリンク: Coleman ファイアーディスクソロを見る">
+      <img src="https://m.media-amazon.com/images/I/618y-F-rOXL._AC_SX300_SY300_QL70_ML2_.jpg" alt="Coleman ファイアーディスクソロ 焚き火台">
+      <span>
+        <span class="affiliate-title">焚き火台ソロ</span>
+        <span class="affiliate-note">PR / Amazonアフィリエイト</span>
+      </span>
+    </a>
+  </div>
   <header>
     <div class="titleblock">
       <div class="title">炎添</div>
