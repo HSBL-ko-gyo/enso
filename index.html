@@ -1,0 +1,1400 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>炎添 enso | web焚き火</title>
+<meta name="description" content="炎添 ensoは、クリックやファイルドロップで火を育てるweb焚き火です。ずっと眺められる焚き火をブラウザで。">
+<link rel="canonical" href="https://enso.hsbl-ko-gyo.com/">
+<meta property="og:title" content="炎添 enso | web焚き火">
+<meta property="og:description" content="クリックやファイルドロップで火を育てる、ずっと眺められるweb焚き火。">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://enso.hsbl-ko-gyo.com/">
+<meta property="og:site_name" content="炎添 enso">
+<meta name="theme-color" content="#070608">
+<style>
+  :root{
+    --night:#070608;
+    --gold:#ffc66b;
+    --ash:#9a8f86;
+    --paper:#efe6da;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  html,body{height:100%;overflow:hidden;background:var(--night)}
+  body{
+    font-family:"Hiragino Mincho ProN","Yu Mincho","Noto Serif JP",serif;
+    color:var(--paper);
+    -webkit-font-smoothing:antialiased;
+    cursor:crosshair;
+  }
+  #scene{position:fixed;inset:0;display:block}
+
+  .ui{
+    position:fixed;inset:0;pointer-events:none;
+    display:flex;flex-direction:column;justify-content:space-between;
+    padding:clamp(20px,4vw,48px);
+    transition:opacity 1.2s ease;
+  }
+  .ui.hidden{opacity:0}
+  header{position:relative;display:flex;justify-content:center}
+  .titleblock{text-align:center}
+  .title{
+    font-size:clamp(20px,2.4vw,30px);letter-spacing:.4em;
+    color:var(--paper);font-weight:500;line-height:1.1;
+    text-indent:.4em;
+    text-shadow:0 0 28px rgba(255,122,47,.3);user-select:none;
+  }
+  .title-sub{
+    font-size:11px;letter-spacing:.55em;color:rgba(255,198,107,.55);
+    margin:5px 0 0;text-indent:.55em;user-select:none;
+  }
+  .clock{
+    position:absolute;top:0;right:0;
+    font-size:11px;letter-spacing:.3em;color:rgba(154,143,134,.7);
+    font-family:"Courier New",monospace;text-align:right;line-height:1.9;
+  }
+  footer{display:flex;justify-content:space-between;align-items:flex-end;gap:16px}
+  .hint{
+    font-size:11px;letter-spacing:.25em;color:rgba(154,143,134,.55);
+    line-height:2;user-select:none;
+  }
+  .credit{
+    color:rgba(255,198,107,.5);text-decoration:none;
+    pointer-events:auto;border-bottom:1px solid rgba(255,198,107,.25);
+    transition:.3s;
+  }
+  .credit:hover{color:var(--gold);border-bottom-color:rgba(255,198,107,.7)}
+  .controls{display:flex;gap:10px;pointer-events:auto}
+  .btn{
+    appearance:none;border:1px solid rgba(239,230,218,.18);
+    background:rgba(7,6,8,.35);backdrop-filter:blur(6px);
+    color:var(--paper);font-family:inherit;font-size:12px;
+    letter-spacing:.28em;padding:12px 20px 12px 24px;cursor:pointer;
+    border-radius:999px;transition:.35s;
+  }
+  .btn:hover{border-color:rgba(255,198,107,.55);color:var(--gold);
+    box-shadow:0 0 28px rgba(255,122,47,.18) inset}
+  .btn:focus-visible{outline:2px solid var(--gold);outline-offset:3px}
+  .btn[aria-pressed="true"]{border-color:rgba(255,198,107,.7);color:var(--gold)}
+
+  @media (prefers-reduced-motion: reduce){ .ui{transition:none} }
+  @media (max-width:560px){ .clock{display:none} .hint-text{display:none} }
+</style>
+</head>
+<body>
+<canvas id="scene" aria-label="焚き火のアニメーション"></canvas>
+
+<div class="ui" id="ui">
+  <header>
+    <div class="titleblock">
+      <div class="title">炎添</div>
+      <div class="title-sub">enso / web焚き火</div>
+    </div>
+    <div class="clock" id="clock"></div>
+  </header>
+  <footer>
+    <div class="hint"><span class="hint-text">クリックで薪を落とす／画像やファイルをドロップで燃やす<br>火に触れたところから燃え広がる<br></span><a class="credit" href="https://sites.google.com/view/hsbl-industrial-hp/home" target="_blank" rel="noopener">作成者 ハシビロ工業</a></div>
+    <div class="controls">
+      <button class="btn" id="file">ファイルを燃やす</button>
+      <button class="btn" id="auto" aria-pressed="false">自動でくべる OFF</button>
+      <button class="btn" id="star" aria-pressed="true">星 ON</button>
+      <button class="btn" id="sound" aria-pressed="false">音 OFF</button>
+      <input type="file" id="fileInput" multiple style="display:none">
+    </div>
+  </footer>
+</div>
+
+<script>
+'use strict';
+const canvas = document.getElementById('scene');
+/* alpha:false で不透明キャンバスにして合成コストを削減 */
+const ctx = canvas.getContext('2d', {alpha:false, desynchronized:true});
+let W, H, DPR, baseX, baseY, scale;
+/* 炎・火の粉は低解像度バッファに描いて拡大合成（オンボGPUのフィルレート対策）
+   ソフトな光なので低解像度でも見た目はほぼ変わらない */
+const FXS=0.55;
+let fxCanvas=null, fxtx=null;
+const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+/* ---------- noise ---------- */
+const perm = new Uint8Array(512);
+{ const p=[...Array(256).keys()];
+  for(let i=255;i>0;i--){const j=Math.random()*(i+1)|0;[p[i],p[j]]=[p[j],p[i]];}
+  for(let i=0;i<512;i++)perm[i]=p[i&255]; }
+function fade(t){return t*t*t*(t*(t*6-15)+10)}
+function grad(h,x,y){const u=h&1?x:-x,v=h&2?y:-y;return u+v}
+function noise(x,y){
+  const X=Math.floor(x)&255, Y=Math.floor(y)&255;
+  x-=Math.floor(x); y-=Math.floor(y);
+  const u=fade(x), v=fade(y);
+  const a=perm[X]+Y, b=perm[X+1]+Y;
+  return (1-v)*((1-u)*grad(perm[a],x,y)+u*grad(perm[b],x-1,y))
+        +v*((1-u)*grad(perm[a+1],x,y-1)+u*grad(perm[b+1],x-1,y-1));
+}
+function clamp01(v){return v<0?0:v>1?1:v}
+
+let t = 0;
+let intensity = 0;
+
+/* ---------- 事前描画スプライト ---------- */
+function makeRadialSprite(size, stops){
+  const c=document.createElement('canvas');
+  c.width=c.height=size;
+  const g2=c.getContext('2d');
+  const g=g2.createRadialGradient(size/2,size/2,0,size/2,size/2,size/2);
+  for(const [p,col] of stops) g.addColorStop(p,col);
+  g2.fillStyle=g;
+  g2.fillRect(0,0,size,size);
+  return c;
+}
+let SPR={};
+function buildSprites(){
+  SPR.glow = makeRadialSprite(512,[
+    [0,'rgba(255,140,50,0.30)'],
+    [0.4,'rgba(200,80,25,0.13)'],
+    [1,'rgba(120,40,10,0)']
+  ]);
+  SPR.core = makeRadialSprite(256,[
+    [0,'rgba(255,170,85,0.7)'],
+    [0.5,'rgba(255,100,30,0.4)'],
+    [1,'rgba(160,40,10,0)']
+  ]);
+  /* 炎の粒：温度4段階（琥珀→橙→朱→深紅） */
+  SPR.flame = [
+    [255,198,100],[255,150,52],[238,96,26],[186,48,14]
+  ].map(c=>makeRadialSprite(64,[
+    [0,`rgba(${c[0]},${c[1]},${c[2]},0.34)`],
+    [0.55,`rgba(${c[0]*0.85|0},${c[1]*0.6|0},${c[2]*0.4|0},0.14)`],
+    [1,'rgba(110,26,0,0)']
+  ]));
+  SPR.ember = makeRadialSprite(32,[
+    [0,'rgba(255,190,90,0.9)'],
+    [0.35,'rgba(255,140,55,0.55)'],
+    [1,'rgba(200,60,10,0)']
+  ]);
+  SPR.smoke = makeRadialSprite(96,[
+    [0,'rgba(150,140,135,0.5)'],
+    [1,'rgba(150,140,135,0)']
+  ]);
+}
+
+let bgCanvas=null;
+function buildBackground(){
+  bgCanvas=document.createElement('canvas');
+  bgCanvas.width=W*DPR; bgCanvas.height=H*DPR;
+  const b=bgCanvas.getContext('2d');
+  b.setTransform(DPR,0,0,DPR,0,0);
+  const sky=b.createLinearGradient(0,0,0,H);
+  sky.addColorStop(0,'#05050c');
+  sky.addColorStop(0.55,'#0a0810');
+  sky.addColorStop(1,'#120c0a');
+  b.fillStyle=sky; b.fillRect(0,0,W,H);
+  const gy=baseY+26*scale;
+  const ground=b.createLinearGradient(0,gy-40,0,H);
+  ground.addColorStop(0,'rgba(20,12,9,0)');
+  ground.addColorStop(0.3,'#16100c');
+  ground.addColorStop(1,'#0b0807');
+  b.fillStyle=ground; b.fillRect(0,gy-40,W,H-gy+40);
+}
+
+function resize(){
+  DPR = Math.min(devicePixelRatio || 1, 1.5);
+  W = innerWidth; H = innerHeight;
+  canvas.width = W * DPR; canvas.height = H * DPR;
+  ctx.setTransform(DPR,0,0,DPR,0,0);
+  baseX = W/2; baseY = H*0.80;
+  scale = Math.min(W,H)/720;
+  fxCanvas=document.createElement('canvas');
+  fxCanvas.width=Math.ceil(W*FXS); fxCanvas.height=Math.ceil(H*FXS);
+  fxtx=fxCanvas.getContext('2d');
+  buildBackground();
+}
+buildSprites();
+addEventListener('resize', resize); resize();
+
+const stars = Array.from({length:120},()=>({
+  x:Math.random(), y:Math.random()*0.55,
+  r:Math.random()*1.1+0.2, p:Math.random()*Math.PI*2,
+  s:0.5+Math.random()*1.5
+}));
+
+/* ==================================================
+   薪：接点から両方向へ燃え広がる
+   ================================================== */
+const logs = [];
+const MAX_LOGS = 9;
+const BURN_RATE = 0.00010;   // 燃焼スピード（小さいほどゆっくり）
+
+function makeLog(x, y){
+  const len=(105+Math.random()*55), w=(17+Math.random()*7);
+  const bark=[];
+  const nLines=5+(Math.random()*4|0);
+  for(let i=0;i<nLines;i++){
+    bark.push({
+      v:(-0.36+0.72*i/(nLines-1))+(Math.random()-0.5)*0.07,
+      wob:Math.random()*10, amp:0.03+Math.random()*0.05,
+      a0:-0.5+Math.random()*0.2, a1:0.5-Math.random()*0.2,
+      lw:0.7+Math.random()*1.1, al:0.3+Math.random()*0.4
+    });
+  }
+  const streaks=[];
+  for(let i=0;i<9;i++){
+    streaks.push({
+      v:(Math.random()-0.5)*0.9,
+      a0:-0.48+Math.random()*0.3, l:0.2+Math.random()*0.5,
+      light:Math.random()<0.4, al:0.08+Math.random()*0.12
+    });
+  }
+  const knots=[];
+  const nK=Math.random()<0.7?1:2;
+  for(let i=0;i<nK;i++){
+    knots.push({u:-0.3+0.6*Math.random(), v:(Math.random()-0.5)*0.4, r:0.10+Math.random()*0.08});
+  }
+  const cracks=[];
+  for(let i=0;i<9;i++){
+    cracks.push({
+      u:-0.46+0.92*Math.random(),
+      v:(Math.random()-0.5)*0.5,
+      l:0.05+Math.random()*0.1,
+      ang:(Math.random()-0.5)*1.2,
+      ph:Math.random()*Math.PI*2
+    });
+  }
+  /* シルエットのプロファイル：縁のうねり・テーパー・斜めの木口 */
+  const NP=7, top=[], bot=[];
+  for(let i=0;i<NP;i++){
+    top.push(-0.5+(Math.random()-0.5)*0.13);
+    bot.push( 0.5+(Math.random()-0.5)*0.13);
+  }
+  /* 隣と平均してなだらかに */
+  for(let i=1;i<NP-1;i++){
+    top[i]=(top[i-1]+top[i]*2+top[i+1])/4;
+    bot[i]=(bot[i-1]+bot[i]*2+bot[i+1])/4;
+  }
+  const prof={
+    top, bot,
+    taper:0.74+Math.random()*0.26,            // 片端がやや細い
+    cut0:(Math.random()-0.5)*0.55,            // 木口の斜め度（左）
+    cut1:(Math.random()-0.5)*0.55             // 木口の斜め度（右）
+  };
+  return {
+    x, y, vy:0,
+    a:(Math.random()-0.5)*0.6,
+    va:(Math.random()-0.5)*0.03,   // 落下中の回転は控えめ
+    len, w, prof,
+    landed:false, settle:-1,
+    targetY: baseY + (Math.random()*6-2)*scale,  // 地面にめり込まない高さ
+    restA: (Math.random()-0.5)*0.4,
+    ignite:0, burn:0, burning:false,
+    u0:0,               // 着火点（火との接点）
+    seed:Math.random()*1000,
+    bark, streaks, knots, cracks,
+    sprite:null, spriteKey:-1, flick:1
+  };
+}
+
+function mix(a,b,p){p=clamp01(p);return[a[0]+(b[0]-a[0])*p,a[1]+(b[1]-a[1])*p,a[2]+(b[2]-a[2])*p]}
+function rgb(c){return`rgb(${c[0]|0},${c[1]|0},${c[2]|0})`}
+function roundRectOn(g,x,y,w,h,r){
+  g.beginPath();
+  g.moveTo(x+r,y);
+  g.arcTo(x+w,y,x+w,y+h,r);
+  g.arcTo(x+w,y+h,x,y+h,r);
+  g.arcTo(x,y+h,x,y,r);
+  g.arcTo(x,y,x+w,y,r);
+  g.closePath();
+}
+
+/* 薪の不規則シルエット（うねる縁＋テーパー＋斜め木口）をパスとして描く
+   prof.top[i]≈-0.5, prof.bot[i]≈+0.5（幅w単位）。テーパーで右端が細る */
+function traceLog(g,L,len,w){
+  const P=L.prof, N=P.top.length;
+  const lw=i=>w*(1-(1-P.taper)*(i/(N-1)));   // 位置iでの局所幅
+  const X=i=>(-0.5+i/(N-1))*len;
+  const TY=i=>P.top[i]*lw(i);
+  const BY=i=>P.bot[i]*lw(i);
+  g.beginPath();
+  g.moveTo(X(0), TY(0));
+  for(let i=1;i<N-1;i++)
+    g.quadraticCurveTo(X(i),TY(i),(X(i)+X(i+1))/2,(TY(i)+TY(i+1))/2);
+  g.lineTo(X(N-1), TY(N-1));
+  g.lineTo(X(N-1)+P.cut1*w, BY(N-1));
+  for(let i=N-2;i>0;i--)
+    g.quadraticCurveTo(X(i),BY(i),(X(i)+X(i-1))/2,(BY(i)+BY(i-1))/2);
+  g.lineTo(X(0)+P.cut0*w, BY(0));
+  g.closePath();
+}
+
+/* 燃焼帯の半径（u単位）：着火点u0から両方向へ */
+function burnHalf(L){
+  return Math.min(1.1, L.ignite*0.06 + Math.min(L.burn,1)*1.05);
+}
+
+/* u位置のワールド座標（燃焼による縮みを反映：描画と一致させる） */
+function pointAt(L,u){
+  const s=scale*(1 - Math.min(Math.max(L.burn,0),1)*0.42);
+  return [L.x+Math.cos(L.a)*u*L.len*s, L.y+Math.sin(L.a)*u*L.len*s];
+}
+
+/* ある点の受ける熱 */
+function heatAt(x,y){
+  let h = 0.06*Math.max(0, 1-Math.hypot(x-baseX, y-baseY)/(150*scale));
+  for(const L of logs){
+    if(L.remnant){
+      /* 燃えさしの熾から火が移る */
+      h += 0.30*Math.max(0, 1-Math.hypot(x-L.x, y-L.y)/(90*scale));
+      continue;
+    }
+    if(!L.burning || L.burn>=1) continue;
+    const out=Math.sin(Math.min(L.burn,1)*Math.PI);
+    const [ex,ey]=pointAt(L,L.u0);
+    h += out*0.8*Math.max(0, 1-Math.hypot(x-ex, y-ey)/(130*scale));
+  }
+  /* 燃えている添付物からも火が移る */
+  for(const it of items){
+    if(!it.burning || it.burn>=1) continue;
+    const out=Math.sin(Math.min(it.burn,1)*Math.PI);
+    h += out*0.6*Math.max(0, 1-Math.hypot(x-it.x, y-it.y)/(110*scale));
+  }
+  return h;
+}
+
+/* 薪上で最も熱い点を探す（着火点の決定・更新） */
+function hottestU(L){
+  let bestU=0, bestH=-1;
+  for(let u=-0.5;u<=0.5;u+=0.125){
+    const [px,py]=pointAt(L,u);
+    const h=heatAt(px,py);
+    if(h>bestH){bestH=h;bestU=u;}
+  }
+  return [bestU,bestH];
+}
+
+/* 薪スプライト：木肌＋着火点から両側への炭化 */
+function renderLogSprite(L){
+  const s=scale;
+  const len=L.len*s, w=L.w*s;
+  const pad=4*s;
+  const cw=Math.ceil((len+w*0.6+pad*2)*DPR), ch=Math.ceil((w+pad*2)*DPR);
+  if(!L.sprite){L.sprite=document.createElement('canvas');}
+  L.sprite.width=cw; L.sprite.height=ch;
+  const g=L.sprite.getContext('2d');
+  g.setTransform(DPR,0,0,DPR,0,0);
+  g.translate((len+w*0.6)/2+pad, w/2+pad);
+
+  const body=g.createLinearGradient(0,-w/2,0,w/2);
+  body.addColorStop(0,'#4a3520');
+  body.addColorStop(0.22,'#564028');
+  body.addColorStop(0.55,'#453019');
+  body.addColorStop(0.85,'#2d1d0f');
+  body.addColorStop(1,'#20140a');
+  g.fillStyle=body;
+  traceLog(g,L,len,w); g.fill();
+
+  g.save();
+  traceLog(g,L,len,w); g.clip();
+
+  g.strokeStyle='rgba(150,110,70,0.16)';
+  g.lineWidth=1.1*s;
+  g.beginPath(); g.moveTo(-len/2+w*0.3,-w*0.36); g.lineTo(len/2-w*0.3,-w*0.36); g.stroke();
+
+  for(const st of L.streaks){
+    g.strokeStyle = st.light? `rgba(128,94,58,${st.al*0.8})` : `rgba(18,11,6,${st.al})`;
+    g.lineWidth=0.9*s;
+    g.beginPath();
+    g.moveTo(st.a0*len, st.v*w);
+    g.lineTo((st.a0+st.l)*len, st.v*w);
+    g.stroke();
+  }
+  for(const b of L.bark){
+    g.strokeStyle=`rgba(14,9,5,${b.al*0.8})`;
+    g.lineWidth=b.lw*s;
+    g.beginPath();
+    const y0=b.v*w;
+    g.moveTo(b.a0*len,y0);
+    for(let k=1;k<=4;k++){
+      const u=b.a0+(b.a1-b.a0)*k/4;
+      g.lineTo(u*len, y0+Math.sin(u*9+b.wob)*b.amp*w*3);
+    }
+    g.stroke();
+  }
+  for(const k of L.knots){
+    const kx=k.u*len, ky=k.v*w, kr=k.r*w*2;
+    g.fillStyle='rgba(26,15,8,0.8)';
+    g.beginPath(); g.ellipse(kx,ky,kr,kr*0.65,0.3,0,7); g.fill();
+    g.strokeStyle='rgba(74,50,28,0.45)';
+    g.lineWidth=0.8*s;
+    g.beginPath(); g.ellipse(kx,ky,kr*0.55,kr*0.36,0.3,0,7); g.stroke();
+  }
+
+  /* --- 着火点から両側への炭化（帯状）--- */
+  const half=burnHalf(L);
+  if(half>0.01 && (L.ignite>0.05 || L.burning)){
+    const ul=L.u0-half, ur=L.u0+half;
+    const soft=0.13;  // 焦げのにじみ幅
+    const off=u=>clamp01(u+0.5);
+    const cg=g.createLinearGradient(-len/2,0,len/2,0);
+    let prev=-1;
+    const stop=(o,c)=>{
+      o=Math.min(1, Math.max(prev+0.0001, clamp01(o)));
+      if(o<=prev) return;          // 1.0到達後の余分なストップは捨てる
+      cg.addColorStop(o,c); prev=o;
+    };
+    stop(0,         ul-soft>0-0.5? 'rgba(20,14,12,0)' : 'rgba(18,13,11,0.95)');
+    stop(off(ul-soft),'rgba(20,14,12,0)');
+    stop(off(ul),     'rgba(18,13,11,0.93)');
+    stop(off(ur),     'rgba(18,13,11,0.93)');
+    stop(off(ur+soft),'rgba(20,14,12,0)');
+    g.fillStyle=cg;
+    g.fillRect(-len/2,-w/2,len,w);
+  }
+  /* 木口：シルエット内側に斜めの切断面として（燃焼帯が達したら黒く） */
+  const half2=burnHalf(L);
+  const P=L.prof;
+  for(const side of [1,-1]){
+    const endU=side*0.5;
+    const c=clamp01((half2-Math.abs(endU-L.u0))*5);
+    const grain=mix([96,72,46],[24,17,13],c);
+    const cut=side>0?P.cut1:P.cut0;
+    const ex=side*len/2 + cut*w*0.5;          // 切断面の中心
+    const lw=w*(side>0?P.taper:1);
+    const rot=Math.atan2(cut*w, lw)*0.8;       // 斜め度に合わせて傾ける
+    g.fillStyle=rgb(grain);
+    g.beginPath(); g.ellipse(ex,0,w*0.13,lw*0.46,rot,0,7); g.fill();
+    g.strokeStyle=`rgba(${grain[0]*0.55|0},${grain[1]*0.55|0},${grain[2]*0.55|0},0.5)`;
+    g.lineWidth=Math.max(0.7,0.8*s);
+    for(let r=0.66;r>0.22;r-=0.28){
+      g.beginPath(); g.ellipse(ex,0,w*0.13*r,lw*0.46*r,rot,0,7); g.stroke();
+    }
+  }
+  g.restore();
+  L.spriteW=(len+w*0.6)+pad*2;
+  L.spriteH=w+pad*2;
+}
+
+function dropLog(px, py){
+  const alive = logs.filter(l=>l.burn<1).length;
+  if(alive >= MAX_LOGS) return false;
+  const log = makeLog(px, Math.min(py, baseY-40*scale));
+  logs.push(log);
+  return true;
+}
+
+function updateLogs(){
+  let heatTotal = 0.06;
+  for(const L of logs){
+    if(L.remnant){ heatTotal += 0.05; continue; }   // 燃えさしの保温
+    if(L.burning && L.burn<1) heatTotal += Math.sin(Math.min(L.burn,1)*Math.PI)*0.75;
+  }
+  /* 燃えている添付物のフレア */
+  for(const it of items){
+    if(it.burning && it.burn<1) heatTotal += Math.sin(Math.min(it.burn,1)*Math.PI)*0.45;
+  }
+  intensity = Math.min(Math.max(heatTotal,0.08), 2.2);
+
+  for(let i=logs.length-1;i>=0;i--){
+    const L=logs[i];
+    L.flick=0.7+0.3*noise(t*0.09, L.seed);
+
+    /* --- 落下：バウンドなし、着地後は静かに角度が馴染む --- */
+    if(!L.landed){
+      L.vy += 0.15*scale;
+      L.y += L.vy;
+      L.a += L.va;
+      if(L.y >= L.targetY){
+        L.y = L.targetY;
+        L.landed=true; L.vy=0; L.settle=0;
+        if(audioOn) thud();
+      }
+    }else if(L.settle>=0 && L.settle<1){
+      L.settle+=0.05;
+      const k=1-Math.pow(1-Math.min(L.settle,1),2); // easeOut
+      L.a = L.a+(L.restA-L.a)*k;
+      if(L.settle>=1){L.a=L.restA; L.settle=-1;}
+    }
+
+    /* --- 着火：最も熱い接点から --- */
+    if(L.landed && !L.burning){
+      if((t+i)%7===0){           // 接点探索は間引いて軽く
+        const [u,h]=hottestU(L);
+        L.u0=u; L._h=h;
+      }
+      L.ignite += (L._h||0) * 0.0016;
+      if(L.ignite>0.35 && Math.random()<0.07){
+        const [ex,ey]=pointAt(L,L.u0);
+        spawnSmoke(ex,ey-6*scale);
+      }
+      if(L.ignite>=1){
+        L.burning=true;
+        if(audioOn) crackleBurst(0.4);
+      }
+    }
+
+    /* --- 燃焼 --- */
+    if(L.burning && L.burn<1){
+      L.burn += BURN_RATE*(0.8+0.4*Math.random());
+      const out = Math.sin(Math.min(L.burn,1)*Math.PI);
+      const [ex,ey]=pointAt(L,L.u0);
+      if(Math.random()<0.04*out) spawnSmoke(ex, ey-30*scale);
+      if(Math.random()<0.09*out) spawnEmberAt(ex+(Math.random()-0.5)*24*scale, ey-6*scale);
+    }
+
+    /* --- 燃え尽きたら消えずに「燃えさし」になる --- */
+    if(L.burning && L.burn>=1 && !L.remnant){
+      L.remnant=true; L.burn=1;
+    }
+    if(L.remnant){
+      /* 燃えさしはたまに小さな火の粉を上げる */
+      if(Math.random()<0.012){
+        const [rx,ry]=pointAt(L,(Math.random()-0.5)*0.6);
+        spawnEmberAt(rx, ry-4*scale);
+      }
+      /* 上限を超えた古い燃えさしだけ、ゆっくり灰に崩れて消える */
+      if(L.crumbling){
+        L.fade=(L.fade===undefined?1:L.fade)-0.0008;
+        if(L.fade<=0){ logs.splice(i,1); continue; }
+      }
+    }
+  }
+
+  /* 燃えさしは最大4つまで残し、超えたら一番古いものから崩れ始める */
+  const rems=logs.filter(l=>l.remnant && !l.crumbling);
+  if(rems.length>4) rems[0].crumbling=true;
+}
+
+function drawLog(L){
+  const s=scale;
+  const key = Math.round((L.ignite*0.3+Math.min(L.burn,1))*28);
+  if(key!==L.spriteKey){ renderLogSprite(L); L.spriteKey=key; }
+
+  const shrink = 1 - Math.min(Math.max(L.burn,0),1)*0.42;
+  const wShrink = 1 - Math.min(L.burn,1)*0.28;
+  /* 燃えさしは消えない。上限超過で崩れ始めたものだけゆっくりフェード */
+  const fadeOut = L.crumbling ? Math.max(L.fade===undefined?1:L.fade, 0) : 1;
+  /* 燃えさしは弱い熾の光を持ち続ける */
+  const glow = L.remnant ? 0.22 : (L.burning ? Math.sin(Math.min(L.burn,1)*Math.PI) : 0);
+  const flick = L.flick;
+  const len=L.len*s*shrink, w=L.w*s*wShrink;
+  const half=burnHalf(L);
+
+  ctx.save();
+  ctx.globalAlpha = fadeOut;
+
+  /* 接地影：地面に座らせる */
+  if(L.landed){
+    ctx.globalAlpha = fadeOut*0.4;
+    ctx.fillStyle='#08050a';
+    ctx.beginPath();
+    ctx.ellipse(L.x, L.y+w*0.62, len*0.5, w*0.34, L.a*0.5, 0, 7);
+    ctx.fill();
+    ctx.globalAlpha = fadeOut;
+  }
+
+  ctx.translate(L.x, L.y);
+  ctx.rotate(L.a);
+  ctx.drawImage(L.sprite, -L.spriteW*shrink/2, -L.spriteH*wShrink/2,
+                L.spriteW*shrink, L.spriteH*wShrink);
+
+  /* 火明かりのリムライト：火の方向を向いた面が暖色に照らされる */
+  {
+    const dx=baseX-L.x, dy=baseY-L.y;
+    const d=Math.hypot(dx,dy);
+    const lit=Math.max(0,1-d/(360*scale))*(0.25+0.5*Math.min(intensity,1.5))*(0.85+0.15*flick);
+    if(lit>0.02){
+      /* 火の方向をローカル座標へ */
+      const ca=Math.cos(-L.a), sa=Math.sin(-L.a);
+      let lx=ca*dx-sa*dy, ly=sa*dx+ca*dy;
+      const ll=Math.hypot(lx,ly)||1; lx/=ll; ly/=ll;
+      const gx=lx*len*0.5, gy=ly*w*0.5;
+      const lg=ctx.createLinearGradient(gx,gy,-gx,-gy);
+      lg.addColorStop(0,`rgba(255,148,62,${0.26*lit})`);
+      lg.addColorStop(0.55,'rgba(255,110,40,0)');
+      ctx.save();
+      traceLog(ctx,L,len,w); ctx.clip();
+      ctx.globalCompositeOperation='lighter';
+      ctx.fillStyle=lg;
+      ctx.fillRect(-len/2-w,-w,len+w*2,w*2);
+      ctx.restore();
+    }
+  }
+
+  if(glow>0.02 || L.ignite>0.4){
+    ctx.save();
+    traceLog(ctx,L,len,w); ctx.clip();
+    ctx.globalCompositeOperation='lighter';
+    ctx.lineCap='round';
+
+    /* 燃焼帯の両端（前線）が熾火で光る */
+    for(const dir of [-1,1]){
+      const fu=L.u0+dir*half;
+      if(fu<=-0.5||fu>=0.5) continue;
+      const fx=fu*len;
+      const a=(0.5+0.5*Math.sin(t*0.17+L.seed+dir))*Math.max(glow,L.ignite*0.5)*flick;
+      ctx.strokeStyle=`rgba(255,150,50,${0.32*a})`;
+      ctx.lineWidth=4.2*s;
+      ctx.beginPath(); ctx.moveTo(fx,-w*0.42); ctx.lineTo(fx,w*0.42); ctx.stroke();
+      ctx.strokeStyle=`rgba(255,210,120,${0.5*a})`;
+      ctx.lineWidth=1.5*s;
+      ctx.beginPath(); ctx.moveTo(fx,-w*0.42); ctx.lineTo(fx,w*0.42); ctx.stroke();
+    }
+
+    /* 光るひび：燃焼帯の内側だけ */
+    for(const c of L.cracks){
+      const local = clamp01((half-Math.abs(c.u-L.u0))*4) * (1-Math.max(L.burn-0.85,0)*4);
+      if(local<=0.03) continue;
+      const f=(0.55+0.45*Math.sin(t*0.13+c.ph))*Math.max(glow,0.3)*flick*local;
+      const cx=c.u*len, cy=c.v*w;
+      const dx=Math.cos(c.ang)*c.l*len, dy=Math.sin(c.ang)*c.l*len*0.4;
+      ctx.strokeStyle=`rgba(255,110,30,${0.28*f})`;
+      ctx.lineWidth=(2.6+glow*2.6)*s;
+      ctx.beginPath(); ctx.moveTo(cx-dx,cy-dy); ctx.lineTo(cx+dx,cy+dy); ctx.stroke();
+      ctx.strokeStyle=`rgba(255,190,105,${0.55*f})`;
+      ctx.lineWidth=(0.9+glow*1.2)*s;
+      ctx.beginPath(); ctx.moveTo(cx-dx,cy-dy); ctx.lineTo(cx+dx,cy+dy); ctx.stroke();
+    }
+
+    /* 末期：燃焼帯全体がほんのり熾火化 */
+    if(L.burn>0.6){
+      const e=(Math.min(L.burn,1)-0.6)/0.4*flick;
+      const ul=Math.max(-0.5,L.u0-half)*len, ur=Math.min(0.5,L.u0+half)*len;
+      ctx.fillStyle=`rgba(255,105,30,${0.14*e})`;
+      ctx.fillRect(ul,-w/2,ur-ul,w);
+    }
+    ctx.restore();
+  }
+  ctx.restore();
+}
+
+/* ==================================================
+   燃やせる添付物：画像・ファイル（紙物なので薪より速く燃える）
+   - ドロップ位置から落下 → 火に近いとすぐ着火
+   - 火に近い端から燃え前線が横断（十数秒で灰、燃えさしは残らない）
+   ================================================== */
+const items=[];
+const MAX_ITEMS=6;
+const ITEM_BURN=0.0016;   // 薪(0.0001)の16倍速
+
+function darkenSprite(src){
+  const c=document.createElement('canvas');
+  c.width=src.width; c.height=src.height;
+  const g=c.getContext('2d');
+  g.drawImage(src,0,0);
+  g.globalCompositeOperation='source-atop';
+  g.fillStyle='rgba(18,13,11,0.93)';
+  g.fillRect(0,0,c.width,c.height);
+  return c;
+}
+
+function spriteFromImage(img, name){
+  const maxSide=120*scale;
+  const k=Math.min(maxSide/img.width, maxSide/img.height, 1);
+  const iw=Math.max(30*scale, img.width*k), ih=Math.max(24*scale, img.height*k);
+  const cap=13*scale;                       // 下部キャプション帯
+  const w=iw, h=ih+cap;
+  const c=document.createElement('canvas');
+  c.width=Math.ceil(w*DPR); c.height=Math.ceil(h*DPR);
+  const g=c.getContext('2d'); g.scale(DPR,DPR);
+  /* プリント写真風：白フチ＋下に余白（チェキ的） */
+  g.fillStyle='#c9c0ae';
+  g.fillRect(0,0,w,h);
+  const m=3.5*scale;
+  g.drawImage(img, m, m, iw-2*m, ih-2*m);
+  /* キャプション（ファイル名） */
+  g.fillStyle='#4a4136';
+  g.font=`${7.5*scale}px "Hiragino Mincho ProN","Yu Mincho",serif`;
+  g.textAlign='center';
+  let nm=(name||'').replace(/\.[^.]+$/,'');
+  if(nm.length>16) nm=nm.slice(0,15)+'…';
+  g.fillText(nm, w/2, ih+cap*0.68, w-8*scale);
+  /* 夜のシーンへの馴染み */
+  g.fillStyle='rgba(20,14,20,0.26)';
+  g.fillRect(0,0,w,h);
+  return {c,w,h};
+}
+
+const EXT_COLORS={pdf:'#8a3b2e',txt:'#5a6a52',doc:'#3e5a7a',docx:'#3e5a7a',
+  xls:'#3e6a4a',xlsx:'#3e6a4a',zip:'#6a5a3e',md:'#555',js:'#7a6a2e',json:'#7a6a2e'};
+function spriteFromDoc(name){
+  const w=92*scale, h=66*scale;
+  const c=document.createElement('canvas');
+  c.width=Math.ceil(w*DPR); c.height=Math.ceil(h*DPR);
+  const g=c.getContext('2d'); g.scale(DPR,DPR);
+  const ext=(name.match(/\.([^.]+)$/)?.[1]||'').toLowerCase();
+  /* 書類カード */
+  g.fillStyle='#b3a98f';
+  g.fillRect(0,0,w,h);
+  /* 折り返しの角 */
+  g.fillStyle='#8e8266';
+  g.beginPath(); g.moveTo(w-13*scale,0); g.lineTo(w,13*scale); g.lineTo(w-13*scale,13*scale); g.closePath(); g.fill();
+  /* 拡張子バッジ */
+  if(ext){
+    g.fillStyle=EXT_COLORS[ext]||'#6a5a4a';
+    const bw=Math.min(8+ext.length*5.5,30)*scale;
+    g.fillRect(6*scale, 5*scale, bw, 10*scale);
+    g.fillStyle='#ded5c0';
+    g.font=`bold ${6.5*scale}px sans-serif`;
+    g.textAlign='center';
+    g.fillText(ext.toUpperCase().slice(0,5), 6*scale+bw/2, 12.4*scale);
+    g.textAlign='left';
+  }
+  /* ファイル名 */
+  g.fillStyle='#3a3328';
+  g.font=`${8.5*scale}px "Hiragino Mincho ProN","Yu Mincho",serif`;
+  let nm=name.length>15? name.slice(0,14)+'…' : name;
+  g.fillText(nm, 6*scale, 27*scale, w-14*scale);
+  /* 本文っぽい線（長さに揺らぎ） */
+  g.strokeStyle='rgba(58,51,40,0.45)';
+  g.lineWidth=1*scale;
+  for(let i=0;i<3;i++){
+    g.beginPath();
+    g.moveTo(6*scale, (37+i*9)*scale);
+    g.lineTo(w-(8+Math.random()*26)*scale, (37+i*9)*scale);
+    g.stroke();
+  }
+  g.fillStyle='rgba(20,14,20,0.22)';
+  g.fillRect(0,0,w,h);
+  return {c,w,h};
+}
+
+function addItemSprite(spr,w,h,x,y){
+  if(items.filter(i=>i.burn<1).length>=MAX_ITEMS) return;
+  /* 燃え前線の行ごとの進み方（ギザギザの燃えムラ） */
+  const rows=[];
+  for(let i=0;i<7;i++){
+    rows.push({lag:Math.random()*0.18, spd:0.9+Math.random()*0.4, ph:Math.random()*6.28});
+  }
+  const restA=(Math.random()-0.5)*0.4;
+  /* 回転後の下端の張り出し量：これが地面ラインに接するよう着地高さを決める */
+  const groundExt = h/2*Math.cos(restA) + w/2*Math.abs(Math.sin(restA));
+  items.push({
+    x, ax:x,                      // ax=投下位置（着地点はこの真下）
+    y:Math.min(y, baseY-40*scale-groundExt), vy:0,
+    a:(Math.random()-0.5)*0.3,
+    w, h, spr, dark:darkenSprite(spr),
+    landed:false,
+    targetY: baseY + (6+Math.random()*5)*scale - groundExt,
+    groundExt,
+    restA,
+    /* ひらひら落下用 */
+    phase:Math.random()*6.28,
+    swayAmp:(18+Math.random()*16)*scale,
+    rock:0.28+Math.random()*0.18,
+    ignite:0, burning:false, burn:0, dir:1, fade:1, acc:0,
+    rows,
+    seed:Math.random()*1000
+  });
+}
+
+/* 画像判定はMIMEと拡張子の両方で（typeが空のことがある） */
+function looksLikeImage(f){
+  return (f.type && f.type.startsWith('image/')) ||
+         /\.(png|jpe?g|gif|webp|bmp|avif|svg)$/i.test(f.name||'');
+}
+
+async function addFile(f,x,y){
+  if(looksLikeImage(f)){
+    /* 第1候補: createImageBitmap（URLを介さないのでfile://でも確実） */
+    try{
+      const bmp=await createImageBitmap(f);
+      const s=spriteFromImage(bmp, f.name||'');
+      if(bmp.close) bmp.close();
+      addItemSprite(s.c,s.w,s.h,x,y);
+      return;
+    }catch(err){ /* 非対応形式は次へ */ }
+    /* 第2候補: FileReader → dataURL → Image（SVG等はこちらで拾う） */
+    try{
+      const url=await new Promise((res,rej)=>{
+        const r=new FileReader();
+        r.onload=()=>res(r.result);
+        r.onerror=()=>rej(r.error);
+        r.readAsDataURL(f);
+      });
+      const img=await new Promise((res,rej)=>{
+        const im=new Image();
+        im.onload=()=>res(im);
+        im.onerror=rej;
+        im.src=url;
+      });
+      const s=spriteFromImage(img, f.name||'');
+      addItemSprite(s.c,s.w,s.h,x,y);
+      return;
+    }catch(err){ /* デコード不能（HEIC等）→ 書類カードへ */ }
+  }
+  const s=spriteFromDoc(f.name||'file');
+  addItemSprite(s.c,s.w,s.h,x,y);
+}
+
+function itemPoint(it,lx,ly){
+  const ca=Math.cos(it.a), sa=Math.sin(it.a);
+  return [it.x+ca*lx-sa*ly, it.y+sa*lx+ca*ly];
+}
+
+/* 行rの燃え前線（0..1）：行ごとに遅れと速度が違ってギザギザに進む */
+function rowFront(it,ri){
+  const r=it.rows[ri];
+  const f=it.burn*1.4*r.spd - r.lag + 0.025*Math.sin(t*0.09+r.ph);
+  return clamp01(f);
+}
+
+function updateItems(){
+  for(let i=items.length-1;i>=0;i--){
+    const it=items[i];
+
+    if(!it.landed){
+      /* ひらひら落下：投下位置を軸にした振り子。地面が近づくと振れ幅が
+         収束していき、着地点は投下位置の真下になる */
+      it.phase += 0.055;
+      const remain=Math.max(0, it.targetY-it.y);
+      const damp=Math.min(1, remain/(130*scale));
+      it.x = it.ax + Math.sin(it.phase)*it.swayAmp*damp;
+      it.a = Math.sin(it.phase+0.7)*it.rock*Math.max(damp,0.3);
+      it.y += (0.85+0.3*Math.abs(Math.cos(it.phase)))*scale;  // 振りの端で少し速く滑る
+      if(it.y>=it.targetY){
+        it.y=it.targetY; it.x=it.ax; it.landed=true; it.a=it.restA;
+        if(audioOn) thud();
+      }
+    }else if(!it.burning){
+      /* 紙物：薪よりずっと早く火が移る */
+      it.ignite += heatAt(it.x,it.y)*0.02;
+      if(it.ignite>0.3 && Math.random()<0.1) spawnSmoke(it.x,it.y-10*scale);
+      if(it.ignite>=1){
+        it.burning=true;
+        const ca=Math.cos(-it.a), sa=Math.sin(-it.a);
+        it.dir=(ca*(baseX-it.x)-sa*(baseY-it.y))>=0?1:-1;  // 火に近い端から
+        if(audioOn) crackleBurst(0.6);
+      }
+    }
+
+    if(it.burning && it.burn<1){
+      it.burn += ITEM_BURN*(0.7+0.6*Math.random());
+      const out=Math.sin(Math.min(it.burn,1)*Math.PI);
+      /* ランダムな行の前線から炎が立つ */
+      it.acc+=0.4+out*1.5;
+      const rowsN=it.rows.length, rh=it.h/rowsN;
+      while(it.acc>=1){
+        it.acc-=1;
+        const ri=(Math.random()*rowsN)|0;
+        const f=rowFront(it,ri);
+        if(f<=0||f>=1) continue;
+        const fx=it.dir*it.w/2 - it.dir*f*it.w;
+        const ly=-it.h/2+(ri+Math.random())*rh;
+        const [px,py]=itemPoint(it,fx,ly);
+        spawnPart(px,py,0.4+out*0.55,4*scale);
+      }
+      if(Math.random()<0.15*out){
+        const ri=(Math.random()*rowsN)|0;
+        const fx=it.dir*it.w/2 - it.dir*rowFront(it,ri)*it.w;
+        const [px,py]=itemPoint(it,fx,-it.h/2+(ri+0.5)*rh);
+        spawnEmberAt(px,py);
+      }
+      if(Math.random()<0.05) spawnSmoke(it.x,it.y-20*scale);
+    }
+
+    /* 燃え切ったら灰となって素早く消える（燃えさしは残らない） */
+    if(it.burn>=1){
+      it.fade-=0.012;
+      if(Math.random()<0.1) spawnEmberAt(it.x+(Math.random()-0.5)*it.w*0.4, it.y-2*scale);
+      if(it.fade<=0) items.splice(i,1);
+    }
+  }
+}
+
+function drawItem(it){
+  const al=Math.max(it.fade,0);
+  ctx.save();
+
+  if(it.landed){
+    ctx.globalAlpha=al*0.35;
+    ctx.fillStyle='#08050a';
+    ctx.beginPath();
+    ctx.ellipse(it.x, it.y+it.groundExt-2*scale, it.w*0.5, Math.min(it.h*0.18,9*scale), it.a*0.4, 0, 7);
+    ctx.fill();
+  }
+  ctx.globalAlpha=al;
+  ctx.translate(it.x,it.y);
+  ctx.rotate(it.a);
+  const w=it.w, h=it.h;
+
+  if(!it.burning){
+    ctx.drawImage(it.spr,-w/2,-h/2,w,h);
+  }else{
+    /* 行ごとに前線位置が違うギザギザの燃え方 */
+    const rowsN=it.rows.length, rh=h/rowsN;
+    for(let ri=0;ri<rowsN;ri++){
+      const f=rowFront(it,ri);
+      const fx=it.dir*w/2 - it.dir*f*w;
+      const ry=-h/2+ri*rh;
+      /* 燃え済み側（黒焦げ） */
+      if(f>0){
+        ctx.save(); ctx.beginPath();
+        if(it.dir>0) ctx.rect(fx,ry,w/2-fx+1,rh+0.5);
+        else         ctx.rect(-w/2,ry,fx+w/2+1,rh+0.5);
+        ctx.clip();
+        ctx.drawImage(it.dark,-w/2,-h/2,w,h);
+        ctx.restore();
+      }
+      /* 未燃側 */
+      if(f<1){
+        ctx.save(); ctx.beginPath();
+        if(it.dir>0) ctx.rect(-w/2,ry,fx+w/2,rh+0.5);
+        else         ctx.rect(fx,ry,w/2-fx,rh+0.5);
+        ctx.clip();
+        ctx.drawImage(it.spr,-w/2,-h/2,w,h);
+        ctx.restore();
+      }
+      /* 行ごとの前線の熾 */
+      if(f>0&&f<1){
+        const a=(0.55+0.45*Math.sin(t*0.27+it.seed+ri*1.7));
+        ctx.globalCompositeOperation='lighter';
+        ctx.lineCap='round';
+        ctx.strokeStyle=`rgba(255,160,55,${0.35*a*al})`;
+        ctx.lineWidth=3.6*scale;
+        ctx.beginPath(); ctx.moveTo(fx,ry); ctx.lineTo(fx,ry+rh); ctx.stroke();
+        ctx.strokeStyle=`rgba(255,225,140,${0.55*a*al})`;
+        ctx.lineWidth=1.3*scale;
+        ctx.beginPath(); ctx.moveTo(fx,ry); ctx.lineTo(fx,ry+rh); ctx.stroke();
+        ctx.globalCompositeOperation='source-over';
+      }
+    }
+  }
+  ctx.restore();
+}
+
+/* ==================================================
+   炎：縮小パーティクル群（炎添WEBApp方式のリアル解釈）
+   - 上昇しながらサイズが線形に縮み、サイズ0で消える
+     → 根元が太く先端が尖る火形が物理から生まれる
+   - 1粒ごとに独立した風（ランダムウォーク＋減衰）でメラメラ
+   - ソフトな光球スプライト＋温度色（若い=琥珀 → 老いた=深い赤）
+   - カーソル/タッチを炎が避ける
+   ================================================== */
+const parts=[], embers=[], smokes=[];
+const MAX_PARTS=320;
+const SHRINK=0.135;   // サイズ縮小速度（参考: 0.1）
+
+const cursor={x:null,y:null};
+addEventListener('pointermove',e=>{cursor.x=e.clientX;cursor.y=e.clientY;});
+addEventListener('pointerup',e=>{
+  if(e.pointerType!=='mouse') setTimeout(()=>{cursor.x=null;cursor.y=null;},120);
+});
+document.addEventListener('pointerleave',()=>{cursor.x=null;cursor.y=null;});
+
+function spawnPart(x,y,power,spread){
+  if(parts.length>=MAX_PARTS) return;
+  const size=(6+Math.random()*9)*scale*(0.65+0.65*power);
+  parts.push({
+    x:x+(Math.random()-0.5)*spread,
+    y:y-Math.random()*4*scale,
+    size, size0:size,
+    vx:(Math.random()-0.5)*0.5*scale,
+    vy:(1.1+Math.random()*1.5)*scale*(0.7+0.5*power),
+    wind:0,
+    alpha:0
+  });
+}
+function spawnEmberAt(x,y){
+  embers.push({
+    x, y,
+    vx:(Math.random()-0.5)*0.7*scale,
+    vy:-(1.4+Math.random()*2.4)*scale,
+    life:0, max:110+Math.random()*150,
+    r:(0.8+Math.random()*1.5)*scale,
+    seed:Math.random()*1000, tw:Math.random()*Math.PI*2
+  });
+}
+function spawnSmoke(x,y){
+  smokes.push({
+    x, y,
+    vy:-(0.5+Math.random()*0.7)*scale,
+    life:0, max:240+Math.random()*200,
+    r:(12+Math.random()*18)*scale, seed:Math.random()*1000
+  });
+}
+
+function updateParticles(){
+  const wind = noise(t*0.004, 88)*0.6;
+
+  if(Math.random()<0.18*intensity) spawnEmberAt(baseX+(Math.random()-0.5)*40*scale, baseY-6*scale);
+
+  /* --- 湧き：熾火の床＋燃焼中の薪の燃焼帯から --- */
+  if(!reduced){
+    /* 床の湧き：種火と下支え役。火力が出てる時も控えめに（主役は薪の炎） */
+    const bedN=Math.random()<Math.min(0.22+intensity*0.1, 0.4)?1:0;
+    if(bedN){
+      const rems=logs.filter(l=>l.remnant);
+      if(rems.length){
+        const R=rems[(Math.random()*rems.length)|0];
+        const [rx,ry]=pointAt(R,(Math.random()-0.5)*0.7);
+        spawnPart(rx, ry-R.w*scale*0.2,
+                  Math.max(0.15, Math.min(intensity*0.3,0.45)), 8*scale);
+      }else if(intensity>0.2){
+        spawnPart(baseX, baseY+2*scale,
+          Math.min(intensity*0.3,0.45),
+          (26+50*Math.min(intensity,1))*scale);
+      }
+    }
+    for(const L of logs){
+      if(!L.burning || L.burn>=1) continue;
+      const out=Math.sin(Math.min(L.burn,1)*Math.PI);
+      /* 蓄積方式：弱火でも毎フレーム安定して湧いて密な火柱を保つ */
+      L.acc=(L.acc||0)+0.35+out*1.35;
+      const half=Math.min(burnHalf(L),0.5);
+      /* 炎の出る幅は炭化範囲ではなく火勢に追従：
+         燃え尽き際は狭く集中し、最盛期だけ帯いっぱいに広がる */
+      const band=half*(0.2+0.8*out);
+      while(L.acc>=1){
+        L.acc-=1;
+        /* 帯の中では均等に湧かせる（中央集中を避ける）。
+           燃え尽き際の収束はband自体の火勢連動で担保 */
+        const r=(Math.random()*2-1);
+        const u=Math.max(-0.5,Math.min(0.5, L.u0+r*band));
+        const [px,py]=pointAt(L,u);
+        spawnPart(px, py-L.w*scale*0.3, 0.2+out*0.8, 7*scale);
+      }
+    }
+  }
+
+  /* --- 粒の更新（縮小・個別の風・カーソル回避） --- */
+  for(let i=parts.length-1;i>=0;i--){
+    const p=parts[i];
+    if(Math.random()<0.06) p.wind += (Math.random()*2-1)*0.09*scale;
+    p.wind*=0.985;
+
+    if(cursor.x!==null){
+      const dx=p.x-cursor.x, dy=p.y-cursor.y;
+      const d=Math.hypot(dx,dy);
+      const R=95*scale;
+      if(d<R && d>0.001){
+        const f=2.2*(R-d)/R*scale;
+        p.x+=dx/d*f; p.y+=dy/d*f;
+      }
+    }
+
+    p.x += p.vx + p.wind + wind*0.05*scale;
+    p.y -= p.vy;
+    p.vy *= 0.995;
+    p.size -= SHRINK*scale;
+    if(p.alpha<1) p.alpha=Math.min(1,p.alpha+0.12);
+
+    if(p.size<=0.4){
+      // 高く昇って燃え切った先端からたまに煙
+      if(p.y<baseY-60*scale && Math.random()<0.03) spawnSmoke(p.x,p.y);
+      parts.splice(i,1);
+    }
+  }
+
+  for(let i=embers.length-1;i>=0;i--){
+    const e=embers[i];
+    e.life++;
+    e.vx+=noise(e.seed,t*0.03)*0.06*scale + wind*0.025*scale;
+    e.vy-=0.005*scale;
+    e.x+=e.vx; e.y+=e.vy;
+    if(e.life>=e.max||e.y<-20) embers.splice(i,1);
+  }
+  for(let i=smokes.length-1;i>=0;i--){
+    const s=smokes[i];
+    s.life++;
+    s.x+=noise(s.seed,t*0.01)*0.5*scale + wind*0.9*scale;
+    s.y+=s.vy;
+    if(s.life>=s.max) smokes.splice(i,1);
+  }
+}
+
+/* 温度色：残りサイズ比で 琥珀→橙→朱→深紅 */
+function partBucket(p){
+  const f=p.size/p.size0;
+  return f>0.72?0 : f>0.48?1 : f>0.26?2 : 3;
+}
+
+function drawFlames(g){
+  g.globalCompositeOperation='lighter';
+  for(const p of parts){
+    const b=partBucket(p);
+    const r=p.size*1.9;
+    g.globalAlpha=p.alpha*(b===3?0.55:0.7);
+    g.drawImage(SPR.flame[b], p.x-r, p.y-r, r*2, r*2);
+  }
+  g.globalAlpha=1;
+}
+
+function drawEmbers(g){
+  g.globalCompositeOperation='lighter';
+  for(const e of embers){
+    const p=e.life/e.max;
+    const tw=0.5+0.5*Math.sin(t*0.5+e.tw);
+    const r=e.r*(1-p*0.5)*2.2;
+    g.globalAlpha=(1-p)*tw;
+    g.drawImage(SPR.ember, e.x-r, e.y-r, r*2, r*2);
+  }
+  g.globalAlpha=1;
+}
+
+function drawSmoke(){
+  ctx.save();
+  for(const s of smokes){
+    const p=s.life/s.max;
+    const r=s.r*(0.6+p*1.8);
+    ctx.globalAlpha=Math.sin(p*Math.PI)*0.09;
+    ctx.drawImage(SPR.smoke, s.x-r, s.y-r, r*2, r*2);
+  }
+  ctx.restore();
+}
+
+let starsOn=true;
+function drawBackground(){
+  ctx.drawImage(bgCanvas,0,0,W,H);
+  if(!starsOn) return;
+  ctx.save();
+  ctx.fillStyle='#cdd6e8';
+  for(const s of stars){
+    const tw = 0.45+0.55*Math.sin(t*0.01*s.s+s.p);
+    ctx.globalAlpha = 0.5*tw;
+    ctx.beginPath();
+    ctx.arc(s.x*W, s.y*H, s.r, 0, 7);
+    ctx.fill();
+  }
+  ctx.restore();
+}
+
+function drawGlow(){
+  const flick = 0.82 + 0.18*noise(t*0.06,3.7) + 0.06*Math.sin(t*0.31);
+  const power = flick*(0.25+0.55*intensity);
+  const R = 420*scale*Math.max(power,0.2)*1.05;
+  ctx.save();
+  ctx.globalAlpha=Math.min(power,1);
+  ctx.drawImage(SPR.glow, baseX-R, baseY-R, R*2, R*2);
+  const coreFlick=0.75+0.25*noise(t*0.1,5.5);
+  const a=coreFlick*(0.3+0.45*Math.min(intensity,1.4));
+  ctx.globalAlpha=Math.min(a,1);
+  ctx.translate(baseX,baseY+10*scale);
+  ctx.scale(1,0.32);
+  const cr=75*scale;
+  ctx.drawImage(SPR.core,-cr,-cr,cr*2,cr*2);
+  ctx.restore();
+}
+
+/* ---------- 自動でくべる ---------- */
+let autoStoke=false;
+setInterval(()=>{
+  if(!autoStoke) return;
+  const active=logs.filter(l=>l.burning && l.burn<0.8).length;
+  const fresh=logs.filter(l=>!l.burning && l.burn<1).length;
+  if((intensity<0.9 && fresh===0) || (active<2 && fresh===0)){
+    dropLog(baseX+(Math.random()-0.5)*110*scale, H*0.2);
+  }
+}, 5000);
+
+/* ---------- メインループ ---------- */
+function frame(){
+  t++;
+  updateLogs();
+  updateItems();
+  updateParticles();
+
+  drawBackground();
+  drawSmoke();
+  drawGlow();
+  [...logs].sort((a,b)=>a.y-b.y).forEach(drawLog);
+  items.forEach(drawItem);
+
+  /* 炎・火の粉は低解像度バッファへ → 1回の拡大drawImageで合成 */
+  fxtx.setTransform(1,0,0,1,0,0);
+  fxtx.clearRect(0,0,fxCanvas.width,fxCanvas.height);
+  fxtx.setTransform(FXS,0,0,FXS,0,0);
+  drawFlames(fxtx);
+  drawEmbers(fxtx);
+  ctx.globalCompositeOperation='lighter';
+  ctx.drawImage(fxCanvas,0,0,W,H);
+  ctx.globalCompositeOperation='source-over';
+
+  requestAnimationFrame(frame);
+}
+
+function placeInitialLog(off, angle, burning, burn, u0){
+  const L=makeLog(baseX+off*scale, baseY);
+  L.landed=true; L.y=L.targetY; L.settle=-1;
+  L.a=angle; L.restA=angle;
+  if(burning){
+    L.burning=true; L.ignite=1; L.burn=burn; L.u0=u0;
+  } else {
+    L.ignite=0.5;
+  }
+  logs.push(L);
+}
+placeInitialLog(-18, -0.30, true, 0.30,  0.25);
+placeInitialLog( 20,  0.26, true, 0.15, -0.25);
+placeInitialLog( -2, -0.05, false, 0, 0);
+
+/* 最初から燃えさしをひとつ置いて、できあがった火床の雰囲気に */
+{
+  const R=makeLog(baseX+8*scale, baseY);
+  R.landed=true; R.y=R.targetY+3*scale; R.settle=-1;
+  R.a=0.7; R.restA=0.7;
+  R.len*=0.55;
+  R.burning=true; R.ignite=1; R.burn=1; R.remnant=true; R.u0=0;
+  logs.push(R);
+}
+
+frame();
+
+/* ---------- 入力 ---------- */
+canvas.addEventListener('pointerdown', e=>{
+  dropLog(e.clientX, e.clientY);
+});
+
+/* ドラッグ＆ドロップ：落とした位置からファイルが落下 */
+addEventListener('dragover', e=>e.preventDefault());
+addEventListener('drop', e=>{
+  e.preventDefault();
+  const fs=[...(e.dataTransfer?.files||[])].slice(0,4);
+  fs.forEach((f,i)=>{
+    addFile(f, e.clientX+(i-(fs.length-1)/2)*40*scale, e.clientY);
+  });
+});
+/* ファイル選択ボタン（モバイル用） */
+const fileBtn=document.getElementById('file');
+const fileInput=document.getElementById('fileInput');
+fileBtn.addEventListener('click', e=>{
+  e.stopPropagation();
+  fileInput.click();
+});
+fileInput.addEventListener('change', ()=>{
+  const fs=[...fileInput.files].slice(0,4);
+  fs.forEach((f,i)=>{
+    addFile(f, baseX+(i-(fs.length-1)/2)*60*scale, H*0.2);
+  });
+  fileInput.value='';
+});
+const autoBtn=document.getElementById('auto');
+autoBtn.addEventListener('click', e=>{
+  e.stopPropagation();
+  autoStoke=!autoStoke;
+  autoBtn.textContent = autoStoke?'自動でくべる ON':'自動でくべる OFF';
+  autoBtn.setAttribute('aria-pressed',autoStoke);
+});
+const starBtn=document.getElementById('star');
+starBtn.addEventListener('click', e=>{
+  e.stopPropagation();
+  starsOn=!starsOn;
+  starBtn.textContent = starsOn?'星 ON':'星 OFF';
+  starBtn.setAttribute('aria-pressed',starsOn);
+});
+
+/* ---------- 音：パチパチ＋ぼうぼうの低音ロア ---------- */
+let actx=null, audioOn=false, roarGain=null, roarTimer=null;
+function initAudio(){
+  actx=new (window.AudioContext||window.webkitAudioContext)();
+
+  /* 炎のロア：ブラウンノイズ→深いローパス。風と違い、火力に連動して不規則に脈打つ */
+  const len=actx.sampleRate*3;
+  const buf=actx.createBuffer(1,len,actx.sampleRate);
+  const d=buf.getChannelData(0);
+  let last=0;
+  for(let i=0;i<len;i++){
+    const w=Math.random()*2-1;
+    last=(last+0.02*w)/1.02;
+    d[i]=last*3.5;
+  }
+  const src=actx.createBufferSource();
+  src.buffer=buf; src.loop=true;
+  const lp=actx.createBiquadFilter();
+  lp.type='lowpass'; lp.frequency.value=140; lp.Q.value=0.7;
+  const lp2=actx.createBiquadFilter();
+  lp2.type='lowpass'; lp2.frequency.value=300;
+  roarGain=actx.createGain(); roarGain.gain.value=0;
+  src.connect(lp).connect(lp2).connect(roarGain).connect(actx.destination);
+  src.start();
+}
+/* ロアの揺らぎ：100msごとに火力×ランダムでゲインを揺らして「ぼうっ…ぼうっ」と脈打たせる */
+function roarLoop(){
+  if(!actx||!roarGain)return;
+  const base = audioOn ? Math.min(0.05 + intensity*0.16, 0.38) : 0;
+  const flutter = 0.55 + 0.45*Math.random();
+  const target = base*flutter;
+  const now=actx.currentTime;
+  roarGain.gain.cancelScheduledValues(now);
+  roarGain.gain.setValueAtTime(roarGain.gain.value, now);
+  roarGain.gain.linearRampToValueAtTime(target, now+0.12);
+  roarTimer=setTimeout(roarLoop, 90+Math.random()*120);
+}
+function pop(time, loud){
+  const o=actx.createBufferSource();
+  const n=actx.sampleRate*0.03;
+  const b=actx.createBuffer(1,n,actx.sampleRate);
+  const d=b.getChannelData(0);
+  for(let i=0;i<n;i++) d[i]=(Math.random()*2-1)*Math.pow(1-i/n,2.5);
+  o.buffer=b;
+  const bp=actx.createBiquadFilter();
+  bp.type='bandpass';
+  bp.frequency.value=1400+Math.random()*2600;
+  bp.Q.value=1.2;
+  const g=actx.createGain();
+  g.gain.value=(loud?0.45:0.1+Math.random()*0.2);
+  o.connect(bp).connect(g).connect(actx.destination);
+  o.start(time);
+}
+function thud(){
+  if(!actx)return;
+  const o=actx.createBufferSource();
+  const n=actx.sampleRate*0.07;
+  const b=actx.createBuffer(1,n,actx.sampleRate);
+  const d=b.getChannelData(0);
+  for(let i=0;i<n;i++) d[i]=(Math.random()*2-1)*Math.pow(1-i/n,3);
+  o.buffer=b;
+  const lp=actx.createBiquadFilter();
+  lp.type='lowpass'; lp.frequency.value=170;
+  const g=actx.createGain(); g.gain.value=0.35;
+  o.connect(lp).connect(g).connect(actx.destination);
+  o.start();
+}
+function scheduleCrackle(){
+  if(!audioOn||!actx)return;
+  const now=actx.currentTime;
+  const count=1+Math.random()*Math.max(intensity*2,1)|0;
+  for(let i=0;i<count;i++) pop(now+Math.random()*0.5,false);
+  setTimeout(scheduleCrackle, 200+Math.random()*1100/(0.4+intensity));
+}
+function crackleBurst(v){
+  if(!actx)return;
+  const now=actx.currentTime;
+  for(let i=0;i<6;i++) pop(now+Math.random()*0.6,Math.random()<v);
+}
+const soundBtn=document.getElementById('sound');
+soundBtn.addEventListener('click',async e=>{
+  e.stopPropagation();
+  if(!actx) initAudio();
+  if(actx.state==='suspended') await actx.resume();
+  audioOn=!audioOn;
+  soundBtn.textContent = audioOn?'音 ON':'音 OFF';
+  soundBtn.setAttribute('aria-pressed',audioOn);
+  clearTimeout(roarTimer);
+  if(audioOn){ scheduleCrackle(); roarLoop(); }
+  else if(roarGain){
+    const now=actx.currentTime;
+    roarGain.gain.cancelScheduledValues(now);
+    roarGain.gain.setValueAtTime(roarGain.gain.value, now);
+    roarGain.gain.linearRampToValueAtTime(0, now+0.5);
+  }
+});
+
+/* ---------- 時計とUIの自動フェード ---------- */
+const clock=document.getElementById('clock');
+function tick(){
+  const d=new Date();
+  const z=n=>String(n).padStart(2,'0');
+  clock.innerHTML=`${d.getFullYear()}.${z(d.getMonth()+1)}.${z(d.getDate())}<br>${z(d.getHours())}:${z(d.getMinutes())}`;
+}
+tick(); setInterval(tick,10000);
+
+const ui=document.getElementById('ui');
+let idleTimer;
+function wake(){
+  ui.classList.remove('hidden');
+  clearTimeout(idleTimer);
+  idleTimer=setTimeout(()=>ui.classList.add('hidden'),6000);
+}
+['pointermove','pointerdown','keydown'].forEach(ev=>addEventListener(ev,wake));
+wake();
+</script>
+</body>
+</html>
