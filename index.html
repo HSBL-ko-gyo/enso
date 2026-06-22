@@ -103,6 +103,8 @@
   .btn:focus-visible{outline:2px solid var(--gold);outline-offset:3px}
   .btn[aria-pressed="true"]{border-color:rgba(255,198,107,.7);color:var(--gold)}
   .btn:disabled{cursor:not-allowed;color:rgba(154,143,134,.45);border-color:rgba(154,143,134,.16)}
+  .icon-btn{min-width:44px;padding:12px 14px;letter-spacing:0;text-align:center}
+  .zoom-reset{min-width:54px}
 
   @media (prefers-reduced-motion: reduce){ .ui{transition:none} }
   @media (max-width:560px){
@@ -120,6 +122,8 @@
     .hint-text{display:none}
     footer{align-items:flex-start}
     .controls{justify-content:flex-start}
+    .icon-btn{min-width:40px;padding:10px 12px}
+    .zoom-reset{min-width:58px}
   }
 </style>
 </head>
@@ -164,6 +168,9 @@
       <button class="btn" id="auto" aria-pressed="false">自動でくべる OFF</button>
       <button class="btn" id="star" aria-pressed="true">星 ON</button>
       <button class="btn" id="sound" aria-pressed="false">音 OFF</button>
+      <button class="btn icon-btn" id="zoomOut" aria-label="火を小さくする">-</button>
+      <button class="btn icon-btn zoom-reset" id="zoomReset" aria-label="火の大きさを戻す">1x</button>
+      <button class="btn icon-btn" id="zoomIn" aria-label="火を大きくする">+</button>
       <button class="btn" id="awake" aria-pressed="false">画面維持 OFF</button>
       <input type="file" id="fileInput" multiple style="display:none">
     </div>
@@ -183,6 +190,7 @@ let fxCanvas=null, fxtx=null;
 const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
 const baseDPR = devicePixelRatio || 1;
 let pageZoom = 1;
+let sceneZoom = 1;
 
 /* ---------- noise ---------- */
 const perm = new Uint8Array(512);
@@ -312,7 +320,7 @@ function resize(){
   canvas.width = W * DPR; canvas.height = H * DPR;
   ctx.setTransform(DPR,0,0,DPR,0,0);
   baseX = W/2; baseY = H*0.80;
-  scale = Math.min(W,H)/720 * pageZoom;
+  scale = Math.min(W,H)/720 * pageZoom * sceneZoom;
   if(Number.isFinite(oldScale) && oldScale>0){
     rescaleScene(oldBaseX, oldBaseY, oldScale, baseX, baseY, scale);
   }
@@ -1457,6 +1465,35 @@ starBtn.addEventListener('click', e=>{
   starBtn.textContent = starsOn?'星 ON':'星 OFF';
   starBtn.setAttribute('aria-pressed',starsOn);
 });
+
+/* ---------- シーン拡大縮小 ---------- */
+const zoomOutBtn=document.getElementById('zoomOut');
+const zoomResetBtn=document.getElementById('zoomReset');
+const zoomInBtn=document.getElementById('zoomIn');
+function clampSceneZoom(v){return Math.max(0.72, Math.min(2.35, v))}
+function updateZoomButtons(){
+  zoomResetBtn.textContent = `${Math.round(sceneZoom*100)}%`;
+  zoomOutBtn.disabled = sceneZoom<=0.73;
+  zoomInBtn.disabled = sceneZoom>=2.34;
+}
+function setSceneZoom(next){
+  sceneZoom=clampSceneZoom(next);
+  resize();
+  updateZoomButtons();
+}
+zoomOutBtn.addEventListener('click', e=>{
+  e.stopPropagation();
+  setSceneZoom(sceneZoom/1.18);
+});
+zoomResetBtn.addEventListener('click', e=>{
+  e.stopPropagation();
+  setSceneZoom(1);
+});
+zoomInBtn.addEventListener('click', e=>{
+  e.stopPropagation();
+  setSceneZoom(sceneZoom*1.18);
+});
+updateZoomButtons();
 
 /* ---------- 音：パチパチ＋ぼうぼうの低音ロア ---------- */
 let actx=null, audioOn=false, roarGain=null, roarTimer=null;
