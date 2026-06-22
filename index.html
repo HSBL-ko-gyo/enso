@@ -18,6 +18,7 @@
     --gold:#ffc66b;
     --ash:#9a8f86;
     --paper:#efe6da;
+    --ui-scale:1;
   }
   *{margin:0;padding:0;box-sizing:border-box}
   html,body{height:100%;overflow:hidden;background:var(--night)}
@@ -30,7 +31,11 @@
   #scene{position:fixed;inset:0;display:block;width:100vw;height:100vh}
 
   .ui{
-    position:fixed;inset:0;pointer-events:none;
+    position:fixed;top:0;left:0;pointer-events:none;
+    width:calc(100vw / var(--ui-scale));
+    height:calc(100vh / var(--ui-scale));
+    transform:scale(var(--ui-scale));
+    transform-origin:top left;
     display:flex;flex-direction:column;justify-content:space-between;
     padding:clamp(20px,4vw,48px);
     transition:opacity 1.2s ease;
@@ -251,6 +256,7 @@ function resize(){
   const oldBaseX = baseX, oldBaseY = baseY, oldScale = scale;
   const rawDPR = devicePixelRatio || 1;
   pageZoom = Math.max(0.65, Math.min(2.4, rawDPR / baseDPR));
+  document.documentElement.style.setProperty('--ui-scale', Math.max(0.62, Math.min(1.08, Math.pow(pageZoom, -0.75))).toFixed(3));
   DPR = Math.min(rawDPR, 1.5);
   viewportScale = visualViewport ? visualViewport.scale : 1;
   W = innerWidth; H = innerHeight;
@@ -267,10 +273,13 @@ function resize(){
   buildBackground();
 }
 function viewportChanged(){
-  const nextDPR = Math.min(devicePixelRatio || 1, 1.5);
+  const rawDPR = devicePixelRatio || 1;
+  const nextPageZoom = Math.max(0.65, Math.min(2.4, rawDPR / baseDPR));
+  const nextDPR = Math.min(rawDPR, 1.5);
   const nextViewportScale = visualViewport ? visualViewport.scale : 1;
   return W!==innerWidth || H!==innerHeight ||
     Math.abs(DPR-nextDPR)>0.001 ||
+    Math.abs(pageZoom-nextPageZoom)>0.001 ||
     Math.abs(viewportScale-nextViewportScale)>0.001;
 }
 buildSprites();
