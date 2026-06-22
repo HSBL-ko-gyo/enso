@@ -191,6 +191,7 @@ function buildSprites(){
 }
 
 let bgCanvas=null;
+let viewportScale=1;
 function buildBackground(){
   bgCanvas=document.createElement('canvas');
   bgCanvas.width=W*DPR; bgCanvas.height=H*DPR;
@@ -247,6 +248,7 @@ function rescaleScene(oldBaseX, oldBaseY, oldScale, newBaseX, newBaseY, newScale
 function resize(){
   const oldBaseX = baseX, oldBaseY = baseY, oldScale = scale;
   DPR = Math.min(devicePixelRatio || 1, 1.5);
+  viewportScale = visualViewport ? visualViewport.scale : 1;
   W = innerWidth; H = innerHeight;
   canvas.width = W * DPR; canvas.height = H * DPR;
   ctx.setTransform(DPR,0,0,DPR,0,0);
@@ -260,8 +262,17 @@ function resize(){
   fxtx=fxCanvas.getContext('2d');
   buildBackground();
 }
+function viewportChanged(){
+  const nextDPR = Math.min(devicePixelRatio || 1, 1.5);
+  const nextViewportScale = visualViewport ? visualViewport.scale : 1;
+  return W!==innerWidth || H!==innerHeight ||
+    Math.abs(DPR-nextDPR)>0.001 ||
+    Math.abs(viewportScale-nextViewportScale)>0.001;
+}
 buildSprites();
-addEventListener('resize', resize); resize();
+addEventListener('resize', resize);
+if(visualViewport) visualViewport.addEventListener('resize', resize);
+resize();
 
 const stars = Array.from({length:120},()=>({
   x:Math.random(), y:Math.random()*0.55,
@@ -1237,6 +1248,7 @@ setInterval(()=>{
 
 /* ---------- メインループ ---------- */
 function frame(){
+  if(viewportChanged()) resize();
   t++;
   updateLogs();
   updateItems();
