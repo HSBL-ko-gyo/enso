@@ -19,7 +19,18 @@
     --ash:#9a8f86;
     --paper:#efe6da;
     --ui-scale:1;
+    --app-w:100vw;
+    --app-h:100vh;
   }
+  @supports (height: 100dvh){
+    :root{
+      --app-w:100dvw;
+      --app-h:100dvh;
+    }
+  }
+  html.debug-viewport-dynamic{--app-w:100dvw;--app-h:100dvh}
+  html.debug-viewport-small{--app-w:100svw;--app-h:100svh}
+  html.debug-viewport-legacy{--app-w:100vw;--app-h:100vh}
   *{margin:0;padding:0;box-sizing:border-box}
   html,body{height:100%;overflow:hidden;background:var(--night)}
   body{
@@ -28,12 +39,12 @@
     -webkit-font-smoothing:antialiased;
     cursor:crosshair;
   }
-  #scene{position:fixed;inset:0;display:block;width:100vw;height:100vh;touch-action:none}
+  #scene{position:fixed;inset:0;display:block;width:var(--app-w);height:var(--app-h);touch-action:none}
 
   .ui{
     position:fixed;top:0;left:0;pointer-events:none;
-    width:calc(100vw / var(--ui-scale));
-    height:calc(100vh / var(--ui-scale));
+    width:calc(var(--app-w) / var(--ui-scale));
+    height:calc(var(--app-h) / var(--ui-scale));
     transform:scale(var(--ui-scale));
     transform-origin:top left;
     display:flex;flex-direction:column;justify-content:space-between;
@@ -210,6 +221,10 @@ function debugNumber(name, fallback){
   const value = Number(debugQuery.get(name));
   return Number.isFinite(value) && value > 0 ? value : fallback;
 }
+function debugChoice(name, choices, fallback){
+  const value = debugQuery.get(name);
+  return choices.includes(value) ? value : fallback;
+}
 function isAndroidGoogleChrome(){
   const uaData = navigator.userAgentData;
   if(uaData){
@@ -240,9 +255,13 @@ const DEBUG = {
   noBackdrop:debugFlag('noBackdrop'),
   // Suspect 6: force DPR/FXS to test fractional sampling interactions such as DPR=1.5 and FXS=0.55.
   dpr:debugNumber('dpr', null),
-  fxs:debugNumber('fxs', 0.55)
+  fxs:debugNumber('fxs', 0.55),
+  viewport:debugQuery.has('viewport') ? debugChoice('viewport', ['dynamic','small','legacy'], 'dynamic') : 'auto'
 };
 document.documentElement.classList.toggle('debug-no-backdrop', DEBUG.noBackdrop);
+document.documentElement.classList.toggle('debug-viewport-dynamic', DEBUG.viewport === 'dynamic');
+document.documentElement.classList.toggle('debug-viewport-small', DEBUG.viewport === 'small');
+document.documentElement.classList.toggle('debug-viewport-legacy', DEBUG.viewport === 'legacy');
 const shouldDisableDesync = !DEBUG.forceDesync && (DEBUG.noDesync || DEBUG.androidGoogleChrome);
 DEBUG.shouldDisableDesync = shouldDisableDesync;
 window.ensoDebug = DEBUG;
@@ -252,6 +271,24 @@ const canvas = document.getElementById('scene');
 const ctxOptions = shouldDisableDesync ? {alpha:false} : {alpha:false, desynchronized:true};
 const ctx = canvas.getContext('2d', ctxOptions);
 let W, H, DPR, baseX, baseY, scale;
+function getCanvasCssRect(){
+  const rect = canvas.getBoundingClientRect();
+  return {
+    left:rect.left,
+    top:rect.top,
+    width:Math.max(1, rect.width),
+    height:Math.max(1, rect.height)
+  };
+}
+function clientToScene(clientX, clientY){
+  const rect = getCanvasCssRect();
+  const sceneW = Number.isFinite(W) && W > 0 ? W : rect.width;
+  const sceneH = Number.isFinite(H) && H > 0 ? H : rect.height;
+  return {
+    x:(clientX - rect.left) * (sceneW / rect.width),
+    y:(clientY - rect.top) * (sceneH / rect.height)
+  };
+}
 /* 炎・火の粉は低解像度バッファに描いて拡大合成（オンボGPUのフィルレート対策）
    ソフトな光なので低解像度でも見た目はほぼ変わらない */
 const FXS=DEBUG.fxs;
@@ -390,8 +427,9 @@ function resize(){
   document.documentElement.style.setProperty('--ui-scale', Math.max(0.42, Math.min(1.18, 1 / pageZoom)).toFixed(3));
   DPR = DEBUG.dpr || Math.min(rawDPR, 1.5);
   viewportScale = visualViewport ? visualViewport.scale : 1;
-  W = innerWidth; H = innerHeight;
-  canvas.width = W * DPR; canvas.height = H * DPR;
+  const rect = getCanvasCssRect();
+  W = rect.width; H = rect.height;
+  canvas.width = Math.ceil(W * DPR); canvas.height = Math.ceil(H * DPR);
   ctx.setTransform(DPR,0,0,DPR,0,0);
   configureSmoothing(ctx);
   baseX = W/2; baseY = H*0.80;
@@ -416,7 +454,8 @@ function viewportChanged(){
   const nextPageZoom = Math.max(0.65, Math.min(2.4, rawDPR / baseDPR));
   const nextDPR = DEBUG.dpr || Math.min(rawDPR, 1.5);
   const nextViewportScale = visualViewport ? visualViewport.scale : 1;
-  return W!==innerWidth || H!==innerHeight ||
+  const rect = getCanvasCssRect();
+  return Math.abs(W-rect.width)>0.5 || Math.abs(H-rect.height)>0.5 ||
     Math.abs(DPR-nextDPR)>0.001 ||
     Math.abs(pageZoom-nextPageZoom)>0.001 ||
     Math.abs(viewportScale-nextViewportScale)>0.001;
@@ -1189,7 +1228,10 @@ const MAX_PARTS=320;
 const SHRINK=0.135;   // サイズ縮小速度（参考: 0.1）
 
 const cursor={x:null,y:null};
-addEventListener('pointermove',e=>{cursor.x=e.clientX;cursor.y=e.clientY;});
+addEventListener('pointermove',e=>{
+  const p=clientToScene(e.clientX,e.clientY);
+  cursor.x=p.x; cursor.y=p.y;
+});
 addEventListener('pointerup',e=>{
   if(e.pointerType!=='mouse') setTimeout(()=>{cursor.x=null;cursor.y=null;},120);
 });
@@ -1197,8 +1239,9 @@ document.addEventListener('pointerleave',()=>{cursor.x=null;cursor.y=null;});
 
 function setTouchCursor(touch){
   if(!touch) return;
-  cursor.x=touch.clientX;
-  cursor.y=touch.clientY;
+  const p=clientToScene(touch.clientX,touch.clientY);
+  cursor.x=p.x;
+  cursor.y=p.y;
 }
 canvas.addEventListener('touchstart', e=>{
   setTouchCursor(e.touches[0]);
@@ -1208,7 +1251,8 @@ canvas.addEventListener('touchmove', e=>{
   const touch=e.touches[0];
   setTouchCursor(touch);
   if(tapCandidate && touch){
-    const dx=touch.clientX-tapCandidate.x, dy=touch.clientY-tapCandidate.y;
+    const p=clientToScene(touch.clientX,touch.clientY);
+    const dx=p.x-tapCandidate.x, dy=p.y-tapCandidate.y;
     if(Math.hypot(dx,dy)>10) tapCandidate.moved=true;
   }
 }, {passive:false});
@@ -1514,12 +1558,15 @@ frame();
 let tapCandidate=null;
 canvas.addEventListener('pointerdown', e=>{
   if(!e.isPrimary) return;
-  cursor.x=e.clientX; cursor.y=e.clientY;
+  const p=clientToScene(e.clientX,e.clientY);
+  cursor.x=p.x; cursor.y=p.y;
   tapCandidate={
     id:e.pointerId,
     type:e.pointerType,
-    x:e.clientX,
-    y:e.clientY,
+    x:p.x,
+    y:p.y,
+    clientX:e.clientX,
+    clientY:e.clientY,
     t:performance.now(),
     moved:false
   };
@@ -1527,15 +1574,18 @@ canvas.addEventListener('pointerdown', e=>{
 });
 canvas.addEventListener('pointermove', e=>{
   if(!tapCandidate || e.pointerId!==tapCandidate.id) return;
-  const dx=e.clientX-tapCandidate.x, dy=e.clientY-tapCandidate.y;
+  const p=clientToScene(e.clientX,e.clientY);
+  cursor.x=p.x; cursor.y=p.y;
+  const dx=p.x-tapCandidate.x, dy=p.y-tapCandidate.y;
   if(Math.hypot(dx,dy)>10) tapCandidate.moved=true;
 });
 canvas.addEventListener('pointerup', e=>{
   if(!tapCandidate || e.pointerId!==tapCandidate.id) return;
+  const p=clientToScene(e.clientX,e.clientY);
   const held=performance.now()-tapCandidate.t;
   const isTouchLike=tapCandidate.type==='touch' || tapCandidate.type==='pen';
   if(!tapCandidate.moved && (!isTouchLike || held<520)){
-    dropLog(e.clientX, e.clientY);
+    dropLog(p.x, p.y);
   }
   tapCandidate=null;
 });
@@ -1547,9 +1597,10 @@ canvas.addEventListener('pointercancel', ()=>{
 addEventListener('dragover', e=>e.preventDefault());
 addEventListener('drop', e=>{
   e.preventDefault();
+  const p=clientToScene(e.clientX,e.clientY);
   const fs=[...(e.dataTransfer?.files||[])].slice(0,4);
   fs.forEach((f,i)=>{
-    addFile(f, e.clientX+(i-(fs.length-1)/2)*40*scale, e.clientY);
+    addFile(f, p.x+(i-(fs.length-1)/2)*40*scale, p.y);
   });
 });
 /* ファイル選択ボタン（モバイル用） */
