@@ -28,7 +28,7 @@
     -webkit-font-smoothing:antialiased;
     cursor:crosshair;
   }
-  #scene{position:fixed;inset:0;display:block;width:100vw;height:100vh}
+  #scene{position:fixed;inset:0;display:block;width:100vw;height:100vh;touch-action:none}
 
   .ui{
     position:fixed;top:0;left:0;pointer-events:none;
@@ -1102,6 +1102,31 @@ addEventListener('pointerup',e=>{
   if(e.pointerType!=='mouse') setTimeout(()=>{cursor.x=null;cursor.y=null;},120);
 });
 document.addEventListener('pointerleave',()=>{cursor.x=null;cursor.y=null;});
+
+function setTouchCursor(touch){
+  if(!touch) return;
+  cursor.x=touch.clientX;
+  cursor.y=touch.clientY;
+}
+canvas.addEventListener('touchstart', e=>{
+  setTouchCursor(e.touches[0]);
+}, {passive:false});
+canvas.addEventListener('touchmove', e=>{
+  e.preventDefault();
+  const touch=e.touches[0];
+  setTouchCursor(touch);
+  if(tapCandidate && touch){
+    const dx=touch.clientX-tapCandidate.x, dy=touch.clientY-tapCandidate.y;
+    if(Math.hypot(dx,dy)>10) tapCandidate.moved=true;
+  }
+}, {passive:false});
+canvas.addEventListener('touchend', ()=>{
+  setTimeout(()=>{cursor.x=null;cursor.y=null;},120);
+}, {passive:false});
+canvas.addEventListener('touchcancel', ()=>{
+  tapCandidate=null;
+  cursor.x=null; cursor.y=null;
+}, {passive:false});
 
 function spawnPart(x,y,power,spread){
   if(parts.length>=MAX_PARTS) return;
