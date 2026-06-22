@@ -106,6 +106,13 @@
   .icon-btn{min-width:44px;padding:12px 14px;letter-spacing:0;text-align:center}
   .zoom-reset{min-width:54px}
 
+  /* Debug: backdrop-filter can create an extra GPU compositing layer over Canvas on Chrome Android. */
+  html.debug-no-backdrop .affiliate,
+  html.debug-no-backdrop .btn{
+    backdrop-filter:none;
+    -webkit-backdrop-filter:none;
+  }
+
   @media (prefers-reduced-motion: reduce){ .ui{transition:none} }
   @media (max-width:560px){
     .affiliate-list{gap:6px}
@@ -193,18 +200,71 @@
 
 <script>
 'use strict';
+const debugQuery = new URLSearchParams(location.search);
+function debugFlag(name){
+  const value = debugQuery.get(name);
+  return value === '' || value === '1' || value === 'true';
+}
+function debugNumber(name, fallback){
+  if(!debugQuery.has(name)) return fallback;
+  const value = Number(debugQuery.get(name));
+  return Number.isFinite(value) && value > 0 ? value : fallback;
+}
+function isAndroidGoogleChrome(){
+  const uaData = navigator.userAgentData;
+  if(uaData){
+    const brands = uaData.brands || [];
+    return uaData.mobile === true &&
+      uaData.platform === 'Android' &&
+      brands.some(b => b.brand === 'Google Chrome');
+  }
+
+  const ua = navigator.userAgent || '';
+  return /Android/i.test(ua) &&
+    /Chrome\//i.test(ua) &&
+    !/EdgA|OPR|SamsungBrowser|Firefox|FxiOS|CriOS|Sleipnir|DuckDuckGo|YaBrowser|Vivaldi|wv|Version\//i.test(ua);
+}
+const DEBUG = {
+  // Suspect 1: desynchronized Canvas can use a low-latency GPU path that may tear or show stale tiles on Chrome Android.
+  noDesync:debugFlag('noDesync'),
+  // Debug override: keep the old desynchronized path even on Android Google Chrome.
+  forceDesync:debugFlag('forceDesync'),
+  androidGoogleChrome:isAndroidGoogleChrome(),
+  // Suspect 2: bypass the low-res fxCanvas + lighter upscale composite path without reducing particle quality.
+  noFxBuffer:debugFlag('noFxBuffer'),
+  // Suspect 3: explicitly request high-quality sampling while scaling fxCanvas into the main Canvas.
+  smooth:debugFlag('smooth'),
+  // Suspect 4: ignore viewport resize churn from the Chrome Android address bar while testing.
+  noViewportResize:debugFlag('noViewportResize'),
+  // Suspect 5: remove CSS backdrop-filter compositing layers above the Canvas.
+  noBackdrop:debugFlag('noBackdrop'),
+  // Suspect 6: force DPR/FXS to test fractional sampling interactions such as DPR=1.5 and FXS=0.55.
+  dpr:debugNumber('dpr', null),
+  fxs:debugNumber('fxs', 0.55)
+};
+document.documentElement.classList.toggle('debug-no-backdrop', DEBUG.noBackdrop);
+const shouldDisableDesync = !DEBUG.forceDesync && (DEBUG.noDesync || DEBUG.androidGoogleChrome);
+DEBUG.shouldDisableDesync = shouldDisableDesync;
+window.ensoDebug = DEBUG;
+
 const canvas = document.getElementById('scene');
 /* alpha:false で不透明キャンバスにして合成コストを削減 */
-const ctx = canvas.getContext('2d', {alpha:false, desynchronized:true});
+const ctxOptions = shouldDisableDesync ? {alpha:false} : {alpha:false, desynchronized:true};
+const ctx = canvas.getContext('2d', ctxOptions);
 let W, H, DPR, baseX, baseY, scale;
 /* 炎・火の粉は低解像度バッファに描いて拡大合成（オンボGPUのフィルレート対策）
    ソフトな光なので低解像度でも見た目はほぼ変わらない */
-const FXS=0.55;
+const FXS=DEBUG.fxs;
 let fxCanvas=null, fxtx=null;
 const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
 const baseDPR = devicePixelRatio || 1;
 let pageZoom = 1;
 let sceneZoom = 1;
+function configureSmoothing(g){
+  if(!DEBUG.smooth || !g) return;
+  g.imageSmoothingEnabled = true;
+  if('imageSmoothingQuality' in g) g.imageSmoothingQuality = 'high';
+}
 
 /* ---------- noise ---------- */
 const perm = new Uint8Array(512);
@@ -328,25 +388,33 @@ function resize(){
   const rawDPR = devicePixelRatio || 1;
   pageZoom = Math.max(0.65, Math.min(2.4, rawDPR / baseDPR));
   document.documentElement.style.setProperty('--ui-scale', Math.max(0.42, Math.min(1.18, 1 / pageZoom)).toFixed(3));
-  DPR = Math.min(rawDPR, 1.5);
+  DPR = DEBUG.dpr || Math.min(rawDPR, 1.5);
   viewportScale = visualViewport ? visualViewport.scale : 1;
   W = innerWidth; H = innerHeight;
   canvas.width = W * DPR; canvas.height = H * DPR;
   ctx.setTransform(DPR,0,0,DPR,0,0);
+  configureSmoothing(ctx);
   baseX = W/2; baseY = H*0.80;
   scale = Math.min(W,H)/720 * pageZoom * sceneZoom;
   if(Number.isFinite(oldScale) && oldScale>0){
     rescaleScene(oldBaseX, oldBaseY, oldScale, baseX, baseY, scale);
   }
-  fxCanvas=document.createElement('canvas');
-  fxCanvas.width=Math.ceil(W*FXS); fxCanvas.height=Math.ceil(H*FXS);
-  fxtx=fxCanvas.getContext('2d');
+  if(DEBUG.noFxBuffer){
+    fxCanvas=null;
+    fxtx=null;
+  }else{
+    fxCanvas=document.createElement('canvas');
+    fxCanvas.width=Math.ceil(W*FXS); fxCanvas.height=Math.ceil(H*FXS);
+    fxtx=fxCanvas.getContext('2d');
+    configureSmoothing(fxtx);
+  }
   buildBackground();
 }
 function viewportChanged(){
+  if(DEBUG.noViewportResize) return false;
   const rawDPR = devicePixelRatio || 1;
   const nextPageZoom = Math.max(0.65, Math.min(2.4, rawDPR / baseDPR));
-  const nextDPR = Math.min(rawDPR, 1.5);
+  const nextDPR = DEBUG.dpr || Math.min(rawDPR, 1.5);
   const nextViewportScale = visualViewport ? visualViewport.scale : 1;
   return W!==innerWidth || H!==innerHeight ||
     Math.abs(DPR-nextDPR)>0.001 ||
@@ -354,8 +422,10 @@ function viewportChanged(){
     Math.abs(viewportScale-nextViewportScale)>0.001;
 }
 buildSprites();
-addEventListener('resize', resize);
-if(visualViewport) visualViewport.addEventListener('resize', resize);
+if(!DEBUG.noViewportResize){
+  addEventListener('resize', resize);
+  if(visualViewport) visualViewport.addEventListener('resize', resize);
+}
 resize();
 
 const stars = Array.from({length:120},()=>({
@@ -1392,14 +1462,23 @@ function frame(){
   items.forEach(drawItem);
 
   /* 炎・火の粉は低解像度バッファへ → 1回の拡大drawImageで合成 */
-  fxtx.setTransform(1,0,0,1,0,0);
-  fxtx.clearRect(0,0,fxCanvas.width,fxCanvas.height);
-  fxtx.setTransform(FXS,0,0,FXS,0,0);
-  drawFlames(fxtx);
-  drawEmbers(fxtx);
-  ctx.globalCompositeOperation='lighter';
-  ctx.drawImage(fxCanvas,0,0,W,H);
-  ctx.globalCompositeOperation='source-over';
+  /* Suspect 2/3: fxCanvas is scaled up and composited with lighter; Chrome Android may sample this path noisily. */
+  if(DEBUG.noFxBuffer){
+    drawFlames(ctx);
+    drawEmbers(ctx);
+    ctx.globalCompositeOperation='source-over';
+  }else{
+    fxtx.setTransform(1,0,0,1,0,0);
+    fxtx.clearRect(0,0,fxCanvas.width,fxCanvas.height);
+    fxtx.setTransform(FXS,0,0,FXS,0,0);
+    configureSmoothing(fxtx);
+    drawFlames(fxtx);
+    drawEmbers(fxtx);
+    ctx.globalCompositeOperation='lighter';
+    configureSmoothing(ctx);
+    ctx.drawImage(fxCanvas,0,0,W,H);
+    ctx.globalCompositeOperation='source-over';
+  }
 
   requestAnimationFrame(frame);
 }
