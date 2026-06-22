@@ -127,12 +127,12 @@
   @media (prefers-reduced-motion: reduce){ .ui{transition:none} }
   @media (max-width:560px){
     .affiliate-list{gap:6px}
-    .affiliate{grid-template-columns:52px 30px;width:100px;max-width:100px;padding:6px 7px 6px 6px;gap:5px}
+    .affiliate{grid-template-columns:52px 42px;width:112px;max-width:112px;padding:6px 7px 6px 6px;gap:5px}
     .affiliate::after{
-      content:"Amazon\A PR";position:static;justify-self:center;align-self:center;
+      content:"Amazon\A" attr(data-mobile-label) "\A PR";position:static;justify-self:center;align-self:center;
       white-space:pre;text-align:center;
       padding:3px 4px;border-radius:6px;background:rgba(7,6,8,.72);
-      color:rgba(255,198,107,.85);font-size:7px;line-height:1.15;letter-spacing:.02em;
+      color:rgba(255,198,107,.85);font-size:7px;line-height:1.18;letter-spacing:.01em;
     }
     .affiliate img{width:52px;height:52px}
     .affiliate > span{display:none}
@@ -166,14 +166,14 @@
 
 <div class="ui" id="ui">
   <div class="affiliate-list" aria-label="Amazonアフィリエイトリンク">
-    <a class="affiliate" href="https://amzn.to/3QjLoyR" target="_blank" rel="sponsored noopener" aria-label="Amazonアフィリエイトリンク: 焚き火ぬいぐるみを見る">
+    <a class="affiliate" href="https://amzn.to/3QjLoyR" target="_blank" rel="sponsored noopener" data-mobile-label="ぬいぐるみ" aria-label="Amazonアフィリエイトリンク: 焚き火ぬいぐるみを見る">
       <img src="https://m.media-amazon.com/images/I/716zf4Z-9xL._AC_SY300_SX300_QL70_ML2_.jpg" alt="焚き火ぬいぐるみ">
       <span>
         <span class="affiliate-title">焚き火ぬいぐるみ</span>
         <span class="affiliate-note">PR / Amazonアフィリエイト</span>
       </span>
     </a>
-    <a class="affiliate" href="https://amzn.to/4eAA5Kr" target="_blank" rel="sponsored noopener" aria-label="Amazonアフィリエイトリンク: Coleman ファイアーディスクソロを見る">
+    <a class="affiliate" href="https://amzn.to/4eAA5Kr" target="_blank" rel="sponsored noopener" data-mobile-label="焚き火台" aria-label="Amazonアフィリエイトリンク: Coleman ファイアーディスクソロを見る">
       <img src="https://m.media-amazon.com/images/I/618y-F-rOXL._AC_SX300_SY300_QL70_ML2_.jpg" alt="Coleman ファイアーディスクソロ 焚き火台">
       <span>
         <span class="affiliate-title">焚き火台ソロ</span>
