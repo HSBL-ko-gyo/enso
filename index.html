@@ -127,6 +127,8 @@ let W, H, DPR, baseX, baseY, scale;
 const FXS=0.55;
 let fxCanvas=null, fxtx=null;
 const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+const baseDPR = devicePixelRatio || 1;
+let pageZoom = 1;
 
 /* ---------- noise ---------- */
 const perm = new Uint8Array(512);
@@ -247,13 +249,15 @@ function rescaleScene(oldBaseX, oldBaseY, oldScale, newBaseX, newBaseY, newScale
 
 function resize(){
   const oldBaseX = baseX, oldBaseY = baseY, oldScale = scale;
-  DPR = Math.min(devicePixelRatio || 1, 1.5);
+  const rawDPR = devicePixelRatio || 1;
+  pageZoom = Math.max(0.65, Math.min(2.4, rawDPR / baseDPR));
+  DPR = Math.min(rawDPR, 1.5);
   viewportScale = visualViewport ? visualViewport.scale : 1;
   W = innerWidth; H = innerHeight;
   canvas.width = W * DPR; canvas.height = H * DPR;
   ctx.setTransform(DPR,0,0,DPR,0,0);
   baseX = W/2; baseY = H*0.80;
-  scale = Math.min(W,H)/720;
+  scale = Math.min(W,H)/720 * pageZoom;
   if(Number.isFinite(oldScale) && oldScale>0){
     rescaleScene(oldBaseX, oldBaseY, oldScale, baseX, baseY, scale);
   }
