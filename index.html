@@ -127,13 +127,14 @@
   @media (prefers-reduced-motion: reduce){ .ui{transition:none} }
   @media (max-width:560px){
     .affiliate-list{gap:6px}
-    .affiliate{grid-template-columns:44px 24px;width:86px;max-width:86px;padding:6px 7px 6px 6px;gap:5px}
+    .affiliate{grid-template-columns:52px 30px;width:100px;max-width:100px;padding:6px 7px 6px 6px;gap:5px}
     .affiliate::after{
-      content:"PR";position:static;justify-self:center;align-self:center;
-      padding:3px 5px;border-radius:999px;background:rgba(7,6,8,.72);
-      color:rgba(255,198,107,.85);font-size:8px;line-height:1;letter-spacing:.05em;
+      content:"Amazon\A PR";position:static;justify-self:center;align-self:center;
+      white-space:pre;text-align:center;
+      padding:3px 4px;border-radius:6px;background:rgba(7,6,8,.72);
+      color:rgba(255,198,107,.85);font-size:7px;line-height:1.15;letter-spacing:.02em;
     }
-    .affiliate img{width:44px;height:44px}
+    .affiliate img{width:52px;height:52px}
     .affiliate > span{display:none}
     .affiliate-title{display:none}
     .affiliate-note{display:none}
