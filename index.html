@@ -209,13 +209,52 @@ function buildBackground(){
   b.fillStyle=ground; b.fillRect(0,gy-40,W,H-gy+40);
 }
 
+function anchorPoint(p, oldX, oldY, newX, newY, r){
+  if(!p) return;
+  p.x = newX + (p.x-oldX)*r;
+  p.y = newY + (p.y-oldY)*r;
+}
+function rescaleScene(oldBaseX, oldBaseY, oldScale, newBaseX, newBaseY, newScale){
+  const r = newScale / oldScale;
+  for(const L of logs){
+    anchorPoint(L, oldBaseX, oldBaseY, newBaseX, newBaseY, r);
+    if(Number.isFinite(L.targetY)) L.targetY = newBaseY + (L.targetY-oldBaseY)*r;
+    if(Number.isFinite(L.vy)) L.vy *= r;
+    L.spriteKey = -1;
+  }
+  for(const it of items){
+    anchorPoint(it, oldBaseX, oldBaseY, newBaseX, newBaseY, r);
+    if(Number.isFinite(it.ax)) it.ax = newBaseX + (it.ax-oldBaseX)*r;
+    if(Number.isFinite(it.targetY)) it.targetY = newBaseY + (it.targetY-oldBaseY)*r;
+    for(const k of ['w','h','groundExt','swayAmp','vy']){
+      if(Number.isFinite(it[k])) it[k] *= r;
+    }
+  }
+  for(const p of parts){
+    anchorPoint(p, oldBaseX, oldBaseY, newBaseX, newBaseY, r);
+    for(const k of ['size','size0','vx','vy','wind']) if(Number.isFinite(p[k])) p[k] *= r;
+  }
+  for(const e of embers){
+    anchorPoint(e, oldBaseX, oldBaseY, newBaseX, newBaseY, r);
+    for(const k of ['vx','vy','r']) if(Number.isFinite(e[k])) e[k] *= r;
+  }
+  for(const s of smokes){
+    anchorPoint(s, oldBaseX, oldBaseY, newBaseX, newBaseY, r);
+    for(const k of ['vy','r']) if(Number.isFinite(s[k])) s[k] *= r;
+  }
+}
+
 function resize(){
+  const oldBaseX = baseX, oldBaseY = baseY, oldScale = scale;
   DPR = Math.min(devicePixelRatio || 1, 1.5);
   W = innerWidth; H = innerHeight;
   canvas.width = W * DPR; canvas.height = H * DPR;
   ctx.setTransform(DPR,0,0,DPR,0,0);
   baseX = W/2; baseY = H*0.80;
   scale = Math.min(W,H)/720;
+  if(Number.isFinite(oldScale) && oldScale>0){
+    rescaleScene(oldBaseX, oldBaseY, oldScale, baseX, baseY, scale);
+  }
   fxCanvas=document.createElement('canvas');
   fxCanvas.width=Math.ceil(W*FXS); fxCanvas.height=Math.ceil(H*FXS);
   fxtx=fxCanvas.getContext('2d');
