@@ -256,7 +256,7 @@ function resize(){
   const oldBaseX = baseX, oldBaseY = baseY, oldScale = scale;
   const rawDPR = devicePixelRatio || 1;
   pageZoom = Math.max(0.65, Math.min(2.4, rawDPR / baseDPR));
-  document.documentElement.style.setProperty('--ui-scale', Math.max(0.62, Math.min(1.08, Math.pow(pageZoom, -0.75))).toFixed(3));
+  document.documentElement.style.setProperty('--ui-scale', Math.max(0.42, Math.min(1.18, 1 / pageZoom)).toFixed(3));
   DPR = Math.min(rawDPR, 1.5);
   viewportScale = visualViewport ? visualViewport.scale : 1;
   W = innerWidth; H = innerHeight;
