@@ -1332,13 +1332,28 @@ function drawGlow(){
 
 /* ---------- 自動でくべる ---------- */
 let autoStoke=false;
+let lastAutoStoke=0;
+function canAutoStoke(){
+  return logs.filter(l=>l.burn<1).length < MAX_LOGS &&
+    !logs.some(l=>!l.landed && l.burn<1);
+}
+function shouldAutoStoke(){
+  const active=logs.filter(l=>l.burning && l.burn<0.8).length;
+  const fresh=logs.filter(l=>!l.burning && !l.remnant && l.burn<1).length;
+  const alive=logs.filter(l=>l.burn<1).length;
+  return alive<3 || fresh===0 || active<2 || intensity<1.05;
+}
+function autoDropLog(force=false){
+  const now=performance.now();
+  if(!canAutoStoke()) return false;
+  if(!force && (now-lastAutoStoke<8500 || !shouldAutoStoke())) return false;
+  const ok=dropLog(baseX+(Math.random()-0.5)*110*scale, H*0.18);
+  if(ok) lastAutoStoke=now;
+  return ok;
+}
 setInterval(()=>{
   if(!autoStoke) return;
-  const active=logs.filter(l=>l.burning && l.burn<0.8).length;
-  const fresh=logs.filter(l=>!l.burning && l.burn<1).length;
-  if((intensity<0.9 && fresh===0) || (active<2 && fresh===0)){
-    dropLog(baseX+(Math.random()-0.5)*110*scale, H*0.2);
-  }
+  autoDropLog();
 }, 5000);
 
 /* ---------- メインループ ---------- */
@@ -1457,6 +1472,7 @@ autoBtn.addEventListener('click', e=>{
   autoStoke=!autoStoke;
   autoBtn.textContent = autoStoke?'自動でくべる ON':'自動でくべる OFF';
   autoBtn.setAttribute('aria-pressed',autoStoke);
+  if(autoStoke) autoDropLog(true);
 });
 const starBtn=document.getElementById('star');
 starBtn.addEventListener('click', e=>{
