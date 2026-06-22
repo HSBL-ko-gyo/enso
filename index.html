@@ -120,8 +120,15 @@
     .affiliate-note{display:none}
     .clock{display:none}
     .hint-text{display:none}
-    footer{align-items:flex-start}
-    .controls{justify-content:flex-start}
+    footer{align-items:flex-start;width:100%}
+    .controls{
+      width:100%;max-width:100%;justify-content:flex-start;flex-wrap:nowrap;
+      overflow-x:auto;overflow-y:hidden;padding:0 0 calc(4px + env(safe-area-inset-bottom));
+      scrollbar-width:none;-webkit-overflow-scrolling:touch;
+    }
+    .controls::-webkit-scrollbar{display:none}
+    .controls .btn{flex:0 0 auto;padding:10px 14px 10px 17px;font-size:11px}
+    #awake{order:-3}
     .icon-btn{min-width:40px;padding:10px 12px}
     .zoom-reset{min-width:58px}
   }
