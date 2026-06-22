@@ -1332,7 +1332,7 @@ function drawGlow(){
 
 /* ---------- 自動でくべる ---------- */
 let autoStoke=false;
-let lastAutoStoke=0;
+let nextAutoStoke=0;
 function canAutoStoke(){
   return logs.filter(l=>l.burn<1).length < MAX_LOGS &&
     !logs.some(l=>!l.landed && l.burn<1);
@@ -1341,20 +1341,27 @@ function shouldAutoStoke(){
   const active=logs.filter(l=>l.burning && l.burn<0.8).length;
   const fresh=logs.filter(l=>!l.burning && !l.remnant && l.burn<1).length;
   const alive=logs.filter(l=>l.burn<1).length;
-  return alive<3 || fresh===0 || active<2 || intensity<1.05;
+  return alive<3 || (fresh===0 && active<3) || intensity<0.75 || Math.random()<0.18;
+}
+function scheduleAutoStoke(soon=false){
+  const fresh=logs.filter(l=>!l.burning && !l.remnant && l.burn<1).length;
+  const alive=logs.filter(l=>l.burn<1).length;
+  const base = soon ? 9000 : (alive<3 ? 22000 : fresh>0 || intensity>1.15 ? 42000 : 30000);
+  const spread = soon ? 12000 : (fresh>0 || intensity>1.15 ? 52000 : 38000);
+  nextAutoStoke=performance.now()+base+Math.random()*spread;
 }
 function autoDropLog(force=false){
-  const now=performance.now();
   if(!canAutoStoke()) return false;
-  if(!force && (now-lastAutoStoke<8500 || !shouldAutoStoke())) return false;
+  if(!force && !shouldAutoStoke()) return false;
   const ok=dropLog(baseX+(Math.random()-0.5)*110*scale, H*0.18);
-  if(ok) lastAutoStoke=now;
+  if(ok) scheduleAutoStoke();
   return ok;
 }
 setInterval(()=>{
   if(!autoStoke) return;
-  autoDropLog();
-}, 5000);
+  if(performance.now()<nextAutoStoke) return;
+  if(!autoDropLog()) scheduleAutoStoke();
+}, 3000);
 
 /* ---------- メインループ ---------- */
 function frame(){
@@ -1472,7 +1479,11 @@ autoBtn.addEventListener('click', e=>{
   autoStoke=!autoStoke;
   autoBtn.textContent = autoStoke?'自動でくべる ON':'自動でくべる OFF';
   autoBtn.setAttribute('aria-pressed',autoStoke);
-  if(autoStoke) autoDropLog(true);
+  if(autoStoke){
+    if(!autoDropLog(true)) scheduleAutoStoke(true);
+  }else{
+    nextAutoStoke=0;
+  }
 });
 const starBtn=document.getElementById('star');
 starBtn.addEventListener('click', e=>{
