@@ -4,6 +4,9 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>炎添 enso | web焚き火</title>
+<meta name="application-name" content="炎添 enso">
+<meta name="apple-mobile-web-app-title" content="炎添 enso">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23070608'/%3E%3Cpath d='M32 54c-10 0-17-7-17-16 0-8 6-13 11-18 3-3 5-6 5-10 7 5 11 11 10 19 3-3 5-7 5-11 5 5 8 11 8 18 0 10-9 18-22 18z' fill='%23ff7a2f'/%3E%3Cpath d='M32 51c-6 0-10-4-10-10 0-5 4-8 7-12 2-2 3-5 3-8 5 4 8 8 7 14 2-2 3-4 3-7 4 4 6 8 6 13 0 6-6 10-16 10z' fill='%23ffc66b'/%3E%3Cpath d='M32 49c-4 0-6-3-6-6 0-4 4-6 6-11 4 4 7 7 7 11 0 4-3 6-7 6z' fill='%23fff3c4'/%3E%3C/svg%3E">
 <meta name="description" content="炎添 ensoは、クリックやファイルドロップで火を育てるweb焚き火です。ずっと眺められる焚き火をブラウザで。">
 <link rel="canonical" href="https://enso.hsbl-ko-gyo.com/">
 <meta property="og:title" content="炎添 enso | web焚き火">
@@ -145,7 +148,7 @@
     footer{align-items:flex-start;width:100%;gap:10px}
     .hint{
       width:100%;font-size:9px;letter-spacing:.12em;line-height:1.75;
-      max-width:calc(100vw - 40px);
+      max-width:calc(var(--app-w) - 40px);
     }
     .hint-text{display:inline}
     .controls{
@@ -202,6 +205,7 @@
       <button class="btn" id="auto" aria-pressed="false">自動でくべる OFF</button>
       <button class="btn" id="star" aria-pressed="true">星 ON</button>
       <button class="btn" id="sound" aria-pressed="false">音 OFF</button>
+      <button class="btn" id="spatial" aria-pressed="false">立体 OFF</button>
       <button class="btn icon-btn" id="zoomOut" aria-label="火を小さくする">-</button>
       <button class="btn icon-btn zoom-reset" id="zoomReset" aria-label="火の大きさを戻す">1x</button>
       <button class="btn icon-btn" id="zoomIn" aria-label="火を大きくする">+</button>
@@ -299,6 +303,7 @@ const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
 const baseDPR = devicePixelRatio || 1;
 let pageZoom = 1;
 let sceneZoom = 1;
+const viewport = window.visualViewport || null;
 function configureSmoothing(g){
   if(!DEBUG.smooth || !g) return;
   g.imageSmoothingEnabled = true;
@@ -428,7 +433,7 @@ function resize(){
   pageZoom = Math.max(0.65, Math.min(2.4, rawDPR / baseDPR));
   document.documentElement.style.setProperty('--ui-scale', Math.max(0.42, Math.min(1.18, 1 / pageZoom)).toFixed(3));
   DPR = DEBUG.dpr || Math.min(rawDPR, 1.5);
-  viewportScale = visualViewport ? visualViewport.scale : 1;
+  viewportScale = viewport ? viewport.scale : 1;
   const rect = getCanvasCssRect();
   W = rect.width; H = rect.height;
   canvas.width = Math.ceil(W * DPR); canvas.height = Math.ceil(H * DPR);
@@ -455,7 +460,7 @@ function viewportChanged(){
   const rawDPR = devicePixelRatio || 1;
   const nextPageZoom = Math.max(0.65, Math.min(2.4, rawDPR / baseDPR));
   const nextDPR = DEBUG.dpr || Math.min(rawDPR, 1.5);
-  const nextViewportScale = visualViewport ? visualViewport.scale : 1;
+  const nextViewportScale = viewport ? viewport.scale : 1;
   const rect = getCanvasCssRect();
   return Math.abs(W-rect.width)>0.5 || Math.abs(H-rect.height)>0.5 ||
     Math.abs(DPR-nextDPR)>0.001 ||
@@ -465,9 +470,17 @@ function viewportChanged(){
 buildSprites();
 if(!DEBUG.noViewportResize){
   addEventListener('resize', resize);
-  if(visualViewport) visualViewport.addEventListener('resize', resize);
+  if(viewport){
+    viewport.addEventListener('resize', resize);
+    viewport.addEventListener('scroll', resize);
+  }
 }
 resize();
+if(!DEBUG.noViewportResize && 'ResizeObserver' in window){
+  new ResizeObserver(()=>{
+    if(viewportChanged()) resize();
+  }).observe(canvas);
+}
 
 const stars = Array.from({length:120},()=>({
   x:Math.random(), y:Math.random()*0.55,
@@ -1246,6 +1259,7 @@ function setTouchCursor(touch){
   cursor.y=p.y;
 }
 canvas.addEventListener('touchstart', e=>{
+  e.preventDefault();
   setTouchCursor(e.touches[0]);
 }, {passive:false});
 canvas.addEventListener('touchmove', e=>{
@@ -1669,9 +1683,81 @@ zoomInBtn.addEventListener('click', e=>{
 updateZoomButtons();
 
 /* ---------- 音：パチパチ＋ぼうぼうの低音ロア ---------- */
-let actx=null, audioOn=false, roarGain=null, roarTimer=null;
+let actx=null, audioOn=false, spatialOn=false, roarGain=null, roarTimer=null;
+let fireBus=null, dryGain=null, spatialGain=null, firePanner=null;
+function setAudioParam(param, value, ramp=0.28){
+  if(!actx || !param) return;
+  const now=actx.currentTime;
+  if(param.cancelAndHoldAtTime){
+    param.cancelAndHoldAtTime(now);
+  }else{
+    param.cancelScheduledValues(now);
+    param.setValueAtTime(param.value, now);
+  }
+  param.linearRampToValueAtTime(value, now+ramp);
+}
+function positionAudioParam(param, value){
+  if(param) param.value=value;
+}
+function configureFirePanner(){
+  firePanner = actx.createPanner();
+  firePanner.panningModel = 'HRTF';
+  firePanner.distanceModel = 'inverse';
+  firePanner.refDistance = 0.8;
+  firePanner.maxDistance = 8;
+  firePanner.rolloffFactor = 0.35;
+  firePanner.coneInnerAngle = 360;
+  firePanner.coneOuterAngle = 360;
+  firePanner.coneOuterGain = 1;
+
+  const listener = actx.listener;
+  if(listener.positionX){
+    positionAudioParam(listener.positionX, 0);
+    positionAudioParam(listener.positionY, 0);
+    positionAudioParam(listener.positionZ, 0);
+    positionAudioParam(listener.forwardX, 0);
+    positionAudioParam(listener.forwardY, 0);
+    positionAudioParam(listener.forwardZ, -1);
+    positionAudioParam(listener.upX, 0);
+    positionAudioParam(listener.upY, 1);
+    positionAudioParam(listener.upZ, 0);
+  }else if(listener.setPosition && listener.setOrientation){
+    listener.setPosition(0,0,0);
+    listener.setOrientation(0,0,-1, 0,1,0);
+  }
+
+  if(firePanner.positionX){
+    positionAudioParam(firePanner.positionX, 0);
+    positionAudioParam(firePanner.positionY, -0.15);
+    positionAudioParam(firePanner.positionZ, -1.2);
+  }else if(firePanner.setPosition){
+    firePanner.setPosition(0, -0.15, -1.2);
+  }
+}
+function setupFireBus(){
+  fireBus=actx.createGain();
+  dryGain=actx.createGain();
+  spatialGain=actx.createGain();
+  configureFirePanner();
+
+  dryGain.gain.value = spatialOn ? 0 : 1;
+  spatialGain.gain.value = spatialOn ? 1 : 0;
+
+  fireBus.connect(dryGain).connect(actx.destination);
+  fireBus.connect(firePanner).connect(spatialGain).connect(actx.destination);
+}
+function applySpatialMode(ramp=0.28){
+  if(!actx || !dryGain || !spatialGain) return;
+  setAudioParam(dryGain.gain, spatialOn ? 0 : 1, ramp);
+  setAudioParam(spatialGain.gain, spatialOn ? 1 : 0, ramp);
+}
+function updateSpatialButton(){
+  spatialBtn.textContent = spatialOn ? '立体 ON' : '立体 OFF';
+  spatialBtn.setAttribute('aria-pressed', spatialOn);
+}
 function initAudio(){
   actx=new (window.AudioContext||window.webkitAudioContext)();
+  setupFireBus();
 
   /* 炎のロア：ブラウンノイズ→深いローパス。風と違い、火力に連動して不規則に脈打つ */
   const len=actx.sampleRate*3;
@@ -1690,7 +1776,7 @@ function initAudio(){
   const lp2=actx.createBiquadFilter();
   lp2.type='lowpass'; lp2.frequency.value=300;
   roarGain=actx.createGain(); roarGain.gain.value=0;
-  src.connect(lp).connect(lp2).connect(roarGain).connect(actx.destination);
+  src.connect(lp).connect(lp2).connect(roarGain).connect(fireBus);
   src.start();
 }
 /* ロアの揺らぎ：100msごとに火力×ランダムでゲインを揺らして「ぼうっ…ぼうっ」と脈打たせる */
@@ -1718,7 +1804,7 @@ function pop(time, loud){
   bp.Q.value=1.2;
   const g=actx.createGain();
   g.gain.value=(loud?0.45:0.1+Math.random()*0.2);
-  o.connect(bp).connect(g).connect(actx.destination);
+  o.connect(bp).connect(g).connect(fireBus);
   o.start(time);
 }
 function thud(){
@@ -1732,7 +1818,7 @@ function thud(){
   const lp=actx.createBiquadFilter();
   lp.type='lowpass'; lp.frequency.value=170;
   const g=actx.createGain(); g.gain.value=0.35;
-  o.connect(lp).connect(g).connect(actx.destination);
+  o.connect(lp).connect(g).connect(fireBus);
   o.start();
 }
 function scheduleCrackle(){
@@ -1748,6 +1834,7 @@ function crackleBurst(v){
   for(let i=0;i<6;i++) pop(now+Math.random()*0.6,Math.random()<v);
 }
 const soundBtn=document.getElementById('sound');
+const spatialBtn=document.getElementById('spatial');
 soundBtn.addEventListener('click',async e=>{
   e.stopPropagation();
   if(!actx) initAudio();
@@ -1764,6 +1851,13 @@ soundBtn.addEventListener('click',async e=>{
     roarGain.gain.linearRampToValueAtTime(0, now+0.5);
   }
 });
+spatialBtn.addEventListener('click', e=>{
+  e.stopPropagation();
+  spatialOn=!spatialOn;
+  updateSpatialButton();
+  applySpatialMode();
+});
+updateSpatialButton();
 
 /* ---------- 画面維持 ---------- */
 const awakeBtn=document.getElementById('awake');
