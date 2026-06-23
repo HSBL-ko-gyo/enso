@@ -1683,9 +1683,20 @@ zoomInBtn.addEventListener('click', e=>{
 updateZoomButtons();
 
 /* ---------- 音：パチパチ＋ぼうぼうの低音ロア ---------- */
-let actx=null, audioOn=false, spatialOn=false, roarGain=null, roarTimer=null;
-let roarBus=null, crackleBus=null, thudBus=null;
-let crackleDryGain=null, crackleSpatialGain=null, firePanner=null;
+let actx=null, audioOn=false, spatialOn=false, roarCoreGain=null, roarAirGain=null, roarTimer=null;
+let outputGain=null, roarBus=null, roarAirBus=null, crackleBus=null, thudBus=null;
+let roarAirDryGain=null, roarAirStereoGain=null, crackleDryGain=null, crackleSpatialGain=null;
+const LEFT_MIC_X=-0.09;
+const RIGHT_MIC_X=0.09;
+const MIC_Z=0;
+const SPEED_OF_SOUND=343;
+const MAX_MIC_DELAY=0.00085;
+const CRACKLE_DRY_ON=0.32;
+const CRACKLE_SPATIAL_ON=0.68;
+const ROAR_AIR_DRY_ON=0.7;
+const ROAR_AIR_STEREO_ON=0.24;
+function clamp(v,min,max){return Math.max(min, Math.min(max, v))}
+function randRange(min,max){return min+Math.random()*(max-min)}
 function setAudioParam(param, value, ramp=0.28){
   if(!actx || !param) return;
   const now=actx.currentTime;
@@ -1697,75 +1708,103 @@ function setAudioParam(param, value, ramp=0.28){
   }
   param.linearRampToValueAtTime(value, now+ramp);
 }
-function positionAudioParam(param, value){
-  if(param) param.value=value;
-}
-function configureFirePanner(){
-  firePanner = actx.createPanner();
-  firePanner.panningModel = 'HRTF';
-  firePanner.distanceModel = 'inverse';
-  firePanner.refDistance = 1.0;
-  firePanner.maxDistance = 8;
-  firePanner.rolloffFactor = 0.25;
-  firePanner.coneInnerAngle = 360;
-  firePanner.coneOuterAngle = 360;
-  firePanner.coneOuterGain = 1;
+function connectRoarAirStereo(){
+  const merger=actx.createChannelMerger(2);
+  const lDelay=actx.createDelay(0.01);
+  const rDelay=actx.createDelay(0.01);
+  const lFilter=actx.createBiquadFilter();
+  const rFilter=actx.createBiquadFilter();
+  const lGain=actx.createGain();
+  const rGain=actx.createGain();
 
-  const listener = actx.listener;
-  if(listener.positionX){
-    positionAudioParam(listener.positionX, 0);
-    positionAudioParam(listener.positionY, 0);
-    positionAudioParam(listener.positionZ, 0);
-    positionAudioParam(listener.forwardX, 0);
-    positionAudioParam(listener.forwardY, 0);
-    positionAudioParam(listener.forwardZ, -1);
-    positionAudioParam(listener.upX, 0);
-    positionAudioParam(listener.upY, 1);
-    positionAudioParam(listener.upZ, 0);
-  }else if(listener.setPosition && listener.setOrientation){
-    listener.setPosition(0,0,0);
-    listener.setOrientation(0,0,-1, 0,1,0);
-  }
+  lDelay.delayTime.value=0.00018;
+  rDelay.delayTime.value=0.00052;
+  lFilter.type='lowpass';
+  rFilter.type='lowpass';
+  lFilter.frequency.value=1250;
+  rFilter.frequency.value=1380;
+  lFilter.Q.value=0.45;
+  rFilter.Q.value=0.45;
+  lGain.gain.value=0.72;
+  rGain.gain.value=0.7;
 
-  if(firePanner.positionX){
-    positionAudioParam(firePanner.positionX, 0);
-    positionAudioParam(firePanner.positionY, -0.15);
-    positionAudioParam(firePanner.positionZ, -1.4);
-  }else if(firePanner.setPosition){
-    firePanner.setPosition(0, -0.15, -1.4);
-  }
+  roarAirBus.connect(lDelay).connect(lFilter).connect(lGain).connect(merger,0,0);
+  roarAirBus.connect(rDelay).connect(rFilter).connect(rGain).connect(merger,0,1);
+  merger.connect(roarAirStereoGain).connect(outputGain);
 }
 function setupAudioBuses(){
+  outputGain=actx.createGain();
+  outputGain.gain.value=0;
+  outputGain.connect(actx.destination);
+
   roarBus=actx.createGain();
+  roarAirBus=actx.createGain();
   crackleBus=actx.createGain();
   thudBus=actx.createGain();
+  roarAirDryGain=actx.createGain();
+  roarAirStereoGain=actx.createGain();
   crackleDryGain=actx.createGain();
   crackleSpatialGain=actx.createGain();
-  configureFirePanner();
 
-  roarBus.connect(actx.destination);
-  thudBus.connect(actx.destination);
+  roarBus.connect(outputGain);
+  thudBus.connect(outputGain);
 
-  crackleDryGain.gain.value = spatialOn ? 0.3 : 1;
-  crackleSpatialGain.gain.value = spatialOn ? 0.65 : 0;
+  crackleDryGain.gain.value = spatialOn ? CRACKLE_DRY_ON : 1;
+  crackleSpatialGain.gain.value = spatialOn ? CRACKLE_SPATIAL_ON : 0;
+  roarAirDryGain.gain.value = spatialOn ? ROAR_AIR_DRY_ON : 1;
+  roarAirStereoGain.gain.value = spatialOn ? ROAR_AIR_STEREO_ON : 0;
 
-  crackleBus.connect(crackleDryGain).connect(actx.destination);
-  crackleBus.connect(firePanner).connect(crackleSpatialGain).connect(actx.destination);
+  crackleBus.connect(crackleDryGain).connect(outputGain);
+  roarAirBus.connect(roarAirDryGain).connect(outputGain);
+  connectRoarAirStereo();
 }
 function applySpatialMode(ramp=0.28){
-  if(!actx || !crackleDryGain || !crackleSpatialGain) return;
-  setAudioParam(crackleDryGain.gain, spatialOn ? 0.3 : 1, ramp);
-  setAudioParam(crackleSpatialGain.gain, spatialOn ? 0.65 : 0, ramp);
+  if(!actx || !crackleDryGain || !crackleSpatialGain || !roarAirDryGain || !roarAirStereoGain) return;
+  setAudioParam(crackleDryGain.gain, spatialOn ? CRACKLE_DRY_ON : 1, ramp);
+  setAudioParam(crackleSpatialGain.gain, spatialOn ? CRACKLE_SPATIAL_ON : 0, ramp);
+  setAudioParam(roarAirDryGain.gain, spatialOn ? ROAR_AIR_DRY_ON : 1, ramp);
+  setAudioParam(roarAirStereoGain.gain, spatialOn ? ROAR_AIR_STEREO_ON : 0, ramp);
 }
 function updateSpatialButton(){
   spatialBtn.textContent = spatialOn ? '立体音 ON' : '立体音 OFF';
   spatialBtn.setAttribute('aria-pressed', spatialOn);
 }
+function connectVirtualCrackle(source, x, y, z){
+  const dL=Math.hypot(x-LEFT_MIC_X, y, z-MIC_Z);
+  const dR=Math.hypot(x-RIGHT_MIC_X, y, z-MIC_Z);
+  const avg=(dL+dR)/2;
+  const lDelay=actx.createDelay(0.01);
+  const rDelay=actx.createDelay(0.01);
+  const lFilter=actx.createBiquadFilter();
+  const rFilter=actx.createBiquadFilter();
+  const lGain=actx.createGain();
+  const rGain=actx.createGain();
+  const merger=actx.createChannelMerger(2);
+  const delayDiff=Math.min(Math.abs(dL-dR)/SPEED_OF_SOUND, MAX_MIC_DELAY);
+  const farL=dL>dR;
+  const distanceAtten=clamp(1.22/avg, 0.72, 0.9);
+
+  lDelay.delayTime.value=farL ? delayDiff : 0;
+  rDelay.delayTime.value=farL ? 0 : delayDiff;
+  lFilter.type='lowpass';
+  rFilter.type='lowpass';
+  lFilter.frequency.value=farL ? 3000 : 5200;
+  rFilter.frequency.value=farL ? 5200 : 3000;
+  lFilter.Q.value=0.55;
+  rFilter.Q.value=0.55;
+  lGain.gain.value=clamp(Math.pow(avg/dL,0.35),0.94,1.06)*distanceAtten;
+  rGain.gain.value=clamp(Math.pow(avg/dR,0.35),0.94,1.06)*distanceAtten;
+
+  source.connect(lDelay).connect(lFilter).connect(lGain).connect(merger,0,0);
+  source.connect(rDelay).connect(rFilter).connect(rGain).connect(merger,0,1);
+  merger.connect(crackleSpatialGain).connect(outputGain);
+  return [lDelay,rDelay,lFilter,rFilter,lGain,rGain,merger];
+}
 function initAudio(){
   actx=new (window.AudioContext||window.webkitAudioContext)();
   setupAudioBuses();
 
-  /* 炎のロア：ブラウンノイズ→深いローパス。風と違い、火力に連動して不規則に脈打つ */
+  /* 炎のロア：低域の芯は中央dry、中高域だけ薄く左右マイク風に広げる */
   const len=actx.sampleRate*3;
   const buf=actx.createBuffer(1,len,actx.sampleRate);
   const d=buf.getChannelData(0);
@@ -1777,24 +1816,27 @@ function initAudio(){
   }
   const src=actx.createBufferSource();
   src.buffer=buf; src.loop=true;
-  const lp=actx.createBiquadFilter();
-  lp.type='lowpass'; lp.frequency.value=140; lp.Q.value=0.7;
-  const lp2=actx.createBiquadFilter();
-  lp2.type='lowpass'; lp2.frequency.value=300;
-  roarGain=actx.createGain(); roarGain.gain.value=0;
-  src.connect(lp).connect(lp2).connect(roarGain).connect(roarBus);
+  const coreLp=actx.createBiquadFilter();
+  coreLp.type='lowpass'; coreLp.frequency.value=180; coreLp.Q.value=0.65;
+  const airHp=actx.createBiquadFilter();
+  airHp.type='highpass'; airHp.frequency.value=180; airHp.Q.value=0.55;
+  const airLp=actx.createBiquadFilter();
+  airLp.type='lowpass'; airLp.frequency.value=1400; airLp.Q.value=0.5;
+  roarCoreGain=actx.createGain(); roarCoreGain.gain.value=0;
+  roarAirGain=actx.createGain(); roarAirGain.gain.value=0;
+  src.connect(coreLp).connect(roarCoreGain).connect(roarBus);
+  src.connect(airHp).connect(airLp).connect(roarAirGain).connect(roarAirBus);
   src.start();
 }
 /* ロアの揺らぎ：100msごとに火力×ランダムでゲインを揺らして「ぼうっ…ぼうっ」と脈打たせる */
 function roarLoop(){
-  if(!actx||!roarGain)return;
+  if(!actx||!roarCoreGain||!roarAirGain)return;
   const base = audioOn ? Math.min(0.05 + intensity*0.16, 0.38) : 0;
   const flutter = 0.55 + 0.45*Math.random();
-  const target = base*flutter;
-  const now=actx.currentTime;
-  roarGain.gain.cancelScheduledValues(now);
-  roarGain.gain.setValueAtTime(roarGain.gain.value, now);
-  roarGain.gain.linearRampToValueAtTime(target, now+0.12);
+  const coreTarget = base*flutter;
+  const airTarget = coreTarget*0.22;
+  setAudioParam(roarCoreGain.gain, coreTarget, 0.12);
+  setAudioParam(roarAirGain.gain, airTarget, 0.16);
   roarTimer=setTimeout(roarLoop, 90+Math.random()*120);
 }
 function pop(time, loud){
@@ -1809,9 +1851,18 @@ function pop(time, loud){
   bp.frequency.value=1400+Math.random()*2600;
   bp.Q.value=1.2;
   const g=actx.createGain();
-  const popLevel = spatialOn ? 0.9 : 1;
+  const popLevel = spatialOn ? 0.92 : 1;
   g.gain.value=(loud?0.45:0.1+Math.random()*0.2)*popLevel;
   o.connect(bp).connect(g).connect(crackleBus);
+  const micNodes=connectVirtualCrackle(g, randRange(-0.28,0.28), randRange(-0.1,0.15), randRange(-1.75,-1.25));
+  o.addEventListener('ended',()=>{
+    try{
+      o.disconnect();
+      bp.disconnect();
+      g.disconnect();
+      micNodes.forEach(n=>n.disconnect());
+    }catch(_){}
+  });
   o.start(time);
 }
 function thud(){
@@ -1850,12 +1901,14 @@ soundBtn.addEventListener('click',async e=>{
   soundBtn.textContent = audioOn?'音 ON':'音 OFF';
   soundBtn.setAttribute('aria-pressed',audioOn);
   clearTimeout(roarTimer);
-  if(audioOn){ scheduleCrackle(); roarLoop(); }
-  else if(roarGain){
-    const now=actx.currentTime;
-    roarGain.gain.cancelScheduledValues(now);
-    roarGain.gain.setValueAtTime(roarGain.gain.value, now);
-    roarGain.gain.linearRampToValueAtTime(0, now+0.5);
+  if(audioOn){
+    setAudioParam(outputGain.gain, 1, 0.06);
+    scheduleCrackle();
+    roarLoop();
+  }else{
+    setAudioParam(outputGain.gain, 0, 0.12);
+    if(roarCoreGain) setAudioParam(roarCoreGain.gain, 0, 0.5);
+    if(roarAirGain) setAudioParam(roarAirGain.gain, 0, 0.5);
   }
 });
 spatialBtn.addEventListener('click', e=>{
