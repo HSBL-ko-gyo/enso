@@ -1697,8 +1697,9 @@ const CRACKLE_SCHEDULE_AHEAD=6.0;
 const CRACKLE_SCHEDULER_INTERVAL=1000;
 const CRACKLE_DRY_ON=0.32;
 const CRACKLE_SPATIAL_ON=0.68;
-const ROAR_AIR_DRY_ON=0.7;
-const ROAR_AIR_STEREO_ON=0.24;
+const ROAR_AIR_DRY_ON=0.45;
+const ROAR_AIR_STEREO_ON=0.45;
+/* Future: pop generation and virtual mic math could move to AudioWorklet for stronger background stability. */
 function clamp(v,min,max){return Math.max(min, Math.min(max, v))}
 function randRange(min,max){return min+Math.random()*(max-min)}
 function setAudioParam(param, value, ramp=0.28){
@@ -1732,8 +1733,8 @@ function connectRoarAirStereo(){
   lGain.gain.value=0.72;
   rGain.gain.value=0.7;
 
-  roarAirBus.connect(lDelay).connect(lFilter).connect(lGain).connect(merger,0,0);
-  roarAirBus.connect(rDelay).connect(rFilter).connect(rGain).connect(merger,0,1);
+  roarAirBus.connect(lGain).connect(lDelay).connect(lFilter).connect(merger,0,0);
+  roarAirBus.connect(rGain).connect(rDelay).connect(rFilter).connect(merger,0,1);
   merger.connect(roarAirStereoGain).connect(outputGain);
 }
 function setupAudioBuses(){
@@ -1803,8 +1804,8 @@ function connectVirtualCrackle(source, x, y, z){
   lGain.gain.value=clamp(Math.pow(avg/dL,0.35),0.94,1.06)*distanceAtten;
   rGain.gain.value=clamp(Math.pow(avg/dR,0.35),0.94,1.06)*distanceAtten;
 
-  source.connect(lDelay).connect(lFilter).connect(lGain).connect(merger,0,0);
-  source.connect(rDelay).connect(rFilter).connect(rGain).connect(merger,0,1);
+  source.connect(lGain).connect(lDelay).connect(lFilter).connect(merger,0,0);
+  source.connect(rGain).connect(rDelay).connect(rFilter).connect(merger,0,1);
   merger.connect(crackleSpatialGain).connect(outputGain);
   return [lDelay,rDelay,lFilter,rFilter,lGain,rGain,merger];
 }
