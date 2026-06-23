@@ -205,7 +205,7 @@
       <button class="btn" id="auto" aria-pressed="false">自動でくべる OFF</button>
       <button class="btn" id="star" aria-pressed="true">星 ON</button>
       <button class="btn" id="sound" aria-pressed="false">音 OFF</button>
-      <button class="btn" id="spatial" aria-pressed="false">立体 OFF</button>
+      <button class="btn" id="spatial" aria-pressed="false" aria-label="焚き火音を少し奥に配置する">立体音 OFF</button>
       <button class="btn icon-btn" id="zoomOut" aria-label="火を小さくする">-</button>
       <button class="btn icon-btn zoom-reset" id="zoomReset" aria-label="火の大きさを戻す">1x</button>
       <button class="btn icon-btn" id="zoomIn" aria-label="火を大きくする">+</button>
@@ -1758,7 +1758,7 @@ function applySpatialMode(ramp=0.28){
   setAudioParam(crackleSpatialGain.gain, spatialOn ? 0.65 : 0, ramp);
 }
 function updateSpatialButton(){
-  spatialBtn.textContent = spatialOn ? '立体 ON' : '立体 OFF';
+  spatialBtn.textContent = spatialOn ? '立体音 ON' : '立体音 OFF';
   spatialBtn.setAttribute('aria-pressed', spatialOn);
 }
 function initAudio(){
