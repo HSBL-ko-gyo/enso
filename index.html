@@ -1692,13 +1692,35 @@ const LEFT_MIC_X=-0.09;
 const RIGHT_MIC_X=0.09;
 const MIC_Z=0;
 const SPEED_OF_SOUND=343;
-const MAX_MIC_DELAY=0.00085;
+const AUDIO_DEPTH = debugQuery.has('audioDepth') ? debugChoice('audioDepth', ['near','mid','far'], 'far') : 'far';
+const AUDIO_DEPTH_SETTINGS = {
+  near:{
+    xRange:0.28, zMin:-1.75, zMax:-1.25, maxDelay:0.00085,
+    distanceRef:1.22, attenMin:0.72, attenMax:0.9, closeCut:5200, farCut:3000,
+    crackleDry:0.32, crackleSpatial:0.68, popLevel:0.92,
+    roarAirDry:0.45, roarAirStereo:0.45, earlyGain:0.06, earlyL:0.018, earlyR:0.026, earlyCut:5200
+  },
+  mid:{
+    xRange:0.36, zMin:-2.4, zMax:-1.7, maxDelay:0.00075,
+    distanceRef:1.75, attenMin:0.74, attenMax:0.88, closeCut:4800, farCut:2800,
+    crackleDry:0.27, crackleSpatial:0.65, popLevel:0.9,
+    roarAirDry:0.4, roarAirStereo:0.48, earlyGain:0.1, earlyL:0.022, earlyR:0.031, earlyCut:4600
+  },
+  far:{
+    xRange:0.45, zMin:-3.6, zMax:-2.4, maxDelay:0.00065,
+    distanceRef:2.45, attenMin:0.75, attenMax:0.88, closeCut:4300, farCut:2500,
+    crackleDry:0.22, crackleSpatial:0.62, popLevel:0.88,
+    roarAirDry:0.36, roarAirStereo:0.5, earlyGain:0.13, earlyL:0.026, earlyR:0.036, earlyCut:3900
+  }
+};
+const AUDIO_DEPTH_CONFIG = AUDIO_DEPTH_SETTINGS[AUDIO_DEPTH];
+const MAX_MIC_DELAY=AUDIO_DEPTH_CONFIG.maxDelay;
 const CRACKLE_SCHEDULE_AHEAD=6.0;
 const CRACKLE_SCHEDULER_INTERVAL=1000;
-const CRACKLE_DRY_ON=0.32;
-const CRACKLE_SPATIAL_ON=0.68;
-const ROAR_AIR_DRY_ON=0.45;
-const ROAR_AIR_STEREO_ON=0.45;
+const CRACKLE_DRY_ON=AUDIO_DEPTH_CONFIG.crackleDry;
+const CRACKLE_SPATIAL_ON=AUDIO_DEPTH_CONFIG.crackleSpatial;
+const ROAR_AIR_DRY_ON=AUDIO_DEPTH_CONFIG.roarAirDry;
+const ROAR_AIR_STEREO_ON=AUDIO_DEPTH_CONFIG.roarAirStereo;
 /* Future: pop generation and virtual mic math could move to AudioWorklet for stronger background stability. */
 function clamp(v,min,max){return Math.max(min, Math.min(max, v))}
 function randRange(min,max){return min+Math.random()*(max-min)}
@@ -1721,21 +1743,39 @@ function connectRoarAirStereo(){
   const rFilter=actx.createBiquadFilter();
   const lGain=actx.createGain();
   const rGain=actx.createGain();
+  const erMerger=actx.createChannelMerger(2);
+  const erLDelay=actx.createDelay(0.05);
+  const erRDelay=actx.createDelay(0.05);
+  const erLFilter=actx.createBiquadFilter();
+  const erRFilter=actx.createBiquadFilter();
+  const erLGain=actx.createGain();
+  const erRGain=actx.createGain();
 
   lDelay.delayTime.value=0.00018;
   rDelay.delayTime.value=0.00052;
   lFilter.type='lowpass';
   rFilter.type='lowpass';
-  lFilter.frequency.value=1250;
-  rFilter.frequency.value=1380;
+  lFilter.frequency.value=AUDIO_DEPTH==='far'?1050:1250;
+  rFilter.frequency.value=AUDIO_DEPTH==='far'?1160:1380;
   lFilter.Q.value=0.45;
   rFilter.Q.value=0.45;
-  lGain.gain.value=0.72;
-  rGain.gain.value=0.7;
+  lGain.gain.value=AUDIO_DEPTH==='far'?0.62:0.72;
+  rGain.gain.value=AUDIO_DEPTH==='far'?0.6:0.7;
+  erLDelay.delayTime.value=AUDIO_DEPTH_CONFIG.earlyL;
+  erRDelay.delayTime.value=AUDIO_DEPTH_CONFIG.earlyR;
+  erLFilter.type='lowpass';
+  erRFilter.type='lowpass';
+  erLFilter.frequency.value=AUDIO_DEPTH_CONFIG.earlyCut*0.85;
+  erRFilter.frequency.value=AUDIO_DEPTH_CONFIG.earlyCut*0.95;
+  erLGain.gain.value=AUDIO_DEPTH_CONFIG.earlyGain*0.22;
+  erRGain.gain.value=AUDIO_DEPTH_CONFIG.earlyGain*0.2;
 
   roarAirBus.connect(lGain).connect(lDelay).connect(lFilter).connect(merger,0,0);
   roarAirBus.connect(rGain).connect(rDelay).connect(rFilter).connect(merger,0,1);
   merger.connect(roarAirStereoGain).connect(outputGain);
+  roarAirBus.connect(erLDelay).connect(erLFilter).connect(erLGain).connect(erMerger,0,0);
+  roarAirBus.connect(erRDelay).connect(erRFilter).connect(erRGain).connect(erMerger,0,1);
+  erMerger.connect(roarAirStereoGain).connect(outputGain);
 }
 function setupAudioBuses(){
   outputGain=actx.createGain();
@@ -1789,25 +1829,45 @@ function connectVirtualCrackle(source, x, y, z){
   const lGain=actx.createGain();
   const rGain=actx.createGain();
   const merger=actx.createChannelMerger(2);
+  const erMerger=actx.createChannelMerger(2);
+  const erLDelay=actx.createDelay(0.05);
+  const erRDelay=actx.createDelay(0.05);
+  const erLFilter=actx.createBiquadFilter();
+  const erRFilter=actx.createBiquadFilter();
+  const erLGain=actx.createGain();
+  const erRGain=actx.createGain();
   const delayDiff=Math.min(Math.abs(dL-dR)/SPEED_OF_SOUND, MAX_MIC_DELAY);
   const farL=dL>dR;
-  const distanceAtten=clamp(1.22/avg, 0.72, 0.9);
+  const distanceAtten=clamp(AUDIO_DEPTH_CONFIG.distanceRef/avg, AUDIO_DEPTH_CONFIG.attenMin, AUDIO_DEPTH_CONFIG.attenMax);
 
   lDelay.delayTime.value=farL ? delayDiff : 0;
   rDelay.delayTime.value=farL ? 0 : delayDiff;
   lFilter.type='lowpass';
   rFilter.type='lowpass';
-  lFilter.frequency.value=farL ? 3000 : 5200;
-  rFilter.frequency.value=farL ? 5200 : 3000;
+  lFilter.frequency.value=farL ? AUDIO_DEPTH_CONFIG.farCut : AUDIO_DEPTH_CONFIG.closeCut;
+  rFilter.frequency.value=farL ? AUDIO_DEPTH_CONFIG.closeCut : AUDIO_DEPTH_CONFIG.farCut;
   lFilter.Q.value=0.55;
   rFilter.Q.value=0.55;
   lGain.gain.value=clamp(Math.pow(avg/dL,0.35),0.94,1.06)*distanceAtten;
   rGain.gain.value=clamp(Math.pow(avg/dR,0.35),0.94,1.06)*distanceAtten;
+  erLDelay.delayTime.value=AUDIO_DEPTH_CONFIG.earlyL+randRange(-0.003,0.003);
+  erRDelay.delayTime.value=AUDIO_DEPTH_CONFIG.earlyR+randRange(-0.003,0.003);
+  erLFilter.type='lowpass';
+  erRFilter.type='lowpass';
+  erLFilter.frequency.value=AUDIO_DEPTH_CONFIG.earlyCut;
+  erRFilter.frequency.value=AUDIO_DEPTH_CONFIG.earlyCut*0.9;
+  erLFilter.Q.value=0.45;
+  erRFilter.Q.value=0.45;
+  erLGain.gain.value=AUDIO_DEPTH_CONFIG.earlyGain*distanceAtten;
+  erRGain.gain.value=AUDIO_DEPTH_CONFIG.earlyGain*0.9*distanceAtten;
 
   source.connect(lGain).connect(lDelay).connect(lFilter).connect(merger,0,0);
   source.connect(rGain).connect(rDelay).connect(rFilter).connect(merger,0,1);
   merger.connect(crackleSpatialGain).connect(outputGain);
-  return [lDelay,rDelay,lFilter,rFilter,lGain,rGain,merger];
+  source.connect(erLDelay).connect(erLFilter).connect(erLGain).connect(erMerger,0,0);
+  source.connect(erRDelay).connect(erRFilter).connect(erRGain).connect(erMerger,0,1);
+  erMerger.connect(crackleSpatialGain).connect(outputGain);
+  return [lDelay,rDelay,lFilter,rFilter,lGain,rGain,merger,erLDelay,erRDelay,erLFilter,erRFilter,erLGain,erRGain,erMerger];
 }
 function cleanupCrackle(entry){
   if(!entry || !scheduledCrackles.has(entry)) return;
@@ -1879,10 +1939,15 @@ function pop(time, loud){
   bp.frequency.value=1400+Math.random()*2600;
   bp.Q.value=1.2;
   const g=actx.createGain();
-  const popLevel = spatialOn ? 0.92 : 1;
+  const popLevel = spatialOn ? AUDIO_DEPTH_CONFIG.popLevel : 1;
   g.gain.value=(loud?0.45:0.1+Math.random()*0.2)*popLevel;
   o.connect(bp).connect(g).connect(crackleBus);
-  const micNodes=connectVirtualCrackle(g, randRange(-0.28,0.28), randRange(-0.1,0.15), randRange(-1.75,-1.25));
+  const micNodes=connectVirtualCrackle(
+    g,
+    randRange(-AUDIO_DEPTH_CONFIG.xRange,AUDIO_DEPTH_CONFIG.xRange),
+    randRange(-0.1,0.15),
+    randRange(AUDIO_DEPTH_CONFIG.zMin,AUDIO_DEPTH_CONFIG.zMax)
+  );
   const entry={source:o,bp,gain:g,nodes:micNodes};
   scheduledCrackles.add(entry);
   o.addEventListener('ended',()=>cleanupCrackle(entry));
