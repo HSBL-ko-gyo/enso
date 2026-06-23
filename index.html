@@ -1684,13 +1684,17 @@ updateZoomButtons();
 
 /* ---------- 音：パチパチ＋ぼうぼうの低音ロア ---------- */
 let actx=null, audioOn=false, spatialOn=false, roarCoreGain=null, roarAirGain=null, roarTimer=null;
+let crackleTimer=null, nextCrackleTime=0;
 let outputGain=null, roarBus=null, roarAirBus=null, crackleBus=null, thudBus=null;
 let roarAirDryGain=null, roarAirStereoGain=null, crackleDryGain=null, crackleSpatialGain=null;
+const scheduledCrackles=new Set();
 const LEFT_MIC_X=-0.09;
 const RIGHT_MIC_X=0.09;
 const MIC_Z=0;
 const SPEED_OF_SOUND=343;
 const MAX_MIC_DELAY=0.00085;
+const CRACKLE_SCHEDULE_AHEAD=6.0;
+const CRACKLE_SCHEDULER_INTERVAL=1000;
 const CRACKLE_DRY_ON=0.32;
 const CRACKLE_SPATIAL_ON=0.68;
 const ROAR_AIR_DRY_ON=0.7;
@@ -1769,6 +1773,10 @@ function updateSpatialButton(){
   spatialBtn.textContent = spatialOn ? '立体音 ON' : '立体音 OFF';
   spatialBtn.setAttribute('aria-pressed', spatialOn);
 }
+function debugAudioState(){
+  if(!actx) return;
+  console.debug('[enso audio]', 'AudioContext state:', actx.state, 'time:', actx.currentTime.toFixed(3));
+}
 function connectVirtualCrackle(source, x, y, z){
   const dL=Math.hypot(x-LEFT_MIC_X, y, z-MIC_Z);
   const dR=Math.hypot(x-RIGHT_MIC_X, y, z-MIC_Z);
@@ -1800,8 +1808,27 @@ function connectVirtualCrackle(source, x, y, z){
   merger.connect(crackleSpatialGain).connect(outputGain);
   return [lDelay,rDelay,lFilter,rFilter,lGain,rGain,merger];
 }
+function cleanupCrackle(entry){
+  if(!entry || !scheduledCrackles.has(entry)) return;
+  scheduledCrackles.delete(entry);
+  try{
+    entry.source.disconnect();
+    entry.bp.disconnect();
+    entry.gain.disconnect();
+    entry.nodes.forEach(n=>n.disconnect());
+  }catch(_){}
+}
+function stopScheduledCrackles(){
+  if(!actx) return;
+  for(const entry of [...scheduledCrackles]){
+    try{ entry.source.stop(actx.currentTime); }catch(_){}
+    cleanupCrackle(entry);
+  }
+}
 function initAudio(){
   actx=new (window.AudioContext||window.webkitAudioContext)();
+  actx.addEventListener('statechange', debugAudioState);
+  debugAudioState();
   setupAudioBuses();
 
   /* 炎のロア：低域の芯は中央dry、中高域だけ薄く左右マイク風に広げる */
@@ -1855,14 +1882,9 @@ function pop(time, loud){
   g.gain.value=(loud?0.45:0.1+Math.random()*0.2)*popLevel;
   o.connect(bp).connect(g).connect(crackleBus);
   const micNodes=connectVirtualCrackle(g, randRange(-0.28,0.28), randRange(-0.1,0.15), randRange(-1.75,-1.25));
-  o.addEventListener('ended',()=>{
-    try{
-      o.disconnect();
-      bp.disconnect();
-      g.disconnect();
-      micNodes.forEach(n=>n.disconnect());
-    }catch(_){}
-  });
+  const entry={source:o,bp,gain:g,nodes:micNodes};
+  scheduledCrackles.add(entry);
+  o.addEventListener('ended',()=>cleanupCrackle(entry));
   o.start(time);
 }
 function thud(){
@@ -1879,12 +1901,23 @@ function thud(){
   o.connect(lp).connect(g).connect(thudBus);
   o.start();
 }
-function scheduleCrackle(){
+function randomCrackleInterval(){
+  return 0.18 + Math.random() * (0.95 / (0.4 + intensity));
+}
+function scheduleCrackleAhead(){
   if(!audioOn||!actx)return;
   const now=actx.currentTime;
-  const count=1+Math.random()*Math.max(intensity*2,1)|0;
-  for(let i=0;i<count;i++) pop(now+Math.random()*0.5,false);
-  setTimeout(scheduleCrackle, 200+Math.random()*1100/(0.4+intensity));
+  const horizon=now+CRACKLE_SCHEDULE_AHEAD;
+  if(!Number.isFinite(nextCrackleTime) || nextCrackleTime<now){
+    nextCrackleTime=now+0.05;
+  }
+  while(nextCrackleTime<horizon){
+    const count=1+Math.random()*Math.max(intensity*2,1)|0;
+    for(let i=0;i<count;i++) pop(nextCrackleTime+Math.random()*0.18,false);
+    nextCrackleTime+=randomCrackleInterval();
+  }
+  clearTimeout(crackleTimer);
+  crackleTimer=setTimeout(scheduleCrackleAhead, CRACKLE_SCHEDULER_INTERVAL);
 }
 function crackleBurst(v){
   if(!actx)return;
@@ -1901,11 +1934,16 @@ soundBtn.addEventListener('click',async e=>{
   soundBtn.textContent = audioOn?'音 ON':'音 OFF';
   soundBtn.setAttribute('aria-pressed',audioOn);
   clearTimeout(roarTimer);
+  clearTimeout(crackleTimer);
   if(audioOn){
     setAudioParam(outputGain.gain, 1, 0.06);
-    scheduleCrackle();
+    nextCrackleTime=actx.currentTime+0.05;
+    scheduleCrackleAhead();
     roarLoop();
   }else{
+    nextCrackleTime=0;
+    crackleTimer=null;
+    stopScheduledCrackles();
     setAudioParam(outputGain.gain, 0, 0.12);
     if(roarCoreGain) setAudioParam(roarCoreGain.gain, 0, 0.5);
     if(roarAirGain) setAudioParam(roarAirGain.gain, 0, 0.5);
