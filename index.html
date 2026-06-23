@@ -1684,7 +1684,8 @@ updateZoomButtons();
 
 /* ---------- 音：パチパチ＋ぼうぼうの低音ロア ---------- */
 let actx=null, audioOn=false, spatialOn=false, roarGain=null, roarTimer=null;
-let fireBus=null, dryGain=null, spatialGain=null, firePanner=null;
+let roarBus=null, crackleBus=null, thudBus=null;
+let crackleDryGain=null, crackleSpatialGain=null, firePanner=null;
 function setAudioParam(param, value, ramp=0.28){
   if(!actx || !param) return;
   const now=actx.currentTime;
@@ -1703,9 +1704,9 @@ function configureFirePanner(){
   firePanner = actx.createPanner();
   firePanner.panningModel = 'HRTF';
   firePanner.distanceModel = 'inverse';
-  firePanner.refDistance = 0.8;
+  firePanner.refDistance = 1.0;
   firePanner.maxDistance = 8;
-  firePanner.rolloffFactor = 0.35;
+  firePanner.rolloffFactor = 0.25;
   firePanner.coneInnerAngle = 360;
   firePanner.coneOuterAngle = 360;
   firePanner.coneOuterGain = 1;
@@ -1729,27 +1730,32 @@ function configureFirePanner(){
   if(firePanner.positionX){
     positionAudioParam(firePanner.positionX, 0);
     positionAudioParam(firePanner.positionY, -0.15);
-    positionAudioParam(firePanner.positionZ, -1.2);
+    positionAudioParam(firePanner.positionZ, -1.4);
   }else if(firePanner.setPosition){
-    firePanner.setPosition(0, -0.15, -1.2);
+    firePanner.setPosition(0, -0.15, -1.4);
   }
 }
-function setupFireBus(){
-  fireBus=actx.createGain();
-  dryGain=actx.createGain();
-  spatialGain=actx.createGain();
+function setupAudioBuses(){
+  roarBus=actx.createGain();
+  crackleBus=actx.createGain();
+  thudBus=actx.createGain();
+  crackleDryGain=actx.createGain();
+  crackleSpatialGain=actx.createGain();
   configureFirePanner();
 
-  dryGain.gain.value = spatialOn ? 0 : 1;
-  spatialGain.gain.value = spatialOn ? 1 : 0;
+  roarBus.connect(actx.destination);
+  thudBus.connect(actx.destination);
 
-  fireBus.connect(dryGain).connect(actx.destination);
-  fireBus.connect(firePanner).connect(spatialGain).connect(actx.destination);
+  crackleDryGain.gain.value = spatialOn ? 0.3 : 1;
+  crackleSpatialGain.gain.value = spatialOn ? 0.65 : 0;
+
+  crackleBus.connect(crackleDryGain).connect(actx.destination);
+  crackleBus.connect(firePanner).connect(crackleSpatialGain).connect(actx.destination);
 }
 function applySpatialMode(ramp=0.28){
-  if(!actx || !dryGain || !spatialGain) return;
-  setAudioParam(dryGain.gain, spatialOn ? 0 : 1, ramp);
-  setAudioParam(spatialGain.gain, spatialOn ? 1 : 0, ramp);
+  if(!actx || !crackleDryGain || !crackleSpatialGain) return;
+  setAudioParam(crackleDryGain.gain, spatialOn ? 0.3 : 1, ramp);
+  setAudioParam(crackleSpatialGain.gain, spatialOn ? 0.65 : 0, ramp);
 }
 function updateSpatialButton(){
   spatialBtn.textContent = spatialOn ? '立体 ON' : '立体 OFF';
@@ -1757,7 +1763,7 @@ function updateSpatialButton(){
 }
 function initAudio(){
   actx=new (window.AudioContext||window.webkitAudioContext)();
-  setupFireBus();
+  setupAudioBuses();
 
   /* 炎のロア：ブラウンノイズ→深いローパス。風と違い、火力に連動して不規則に脈打つ */
   const len=actx.sampleRate*3;
@@ -1776,7 +1782,7 @@ function initAudio(){
   const lp2=actx.createBiquadFilter();
   lp2.type='lowpass'; lp2.frequency.value=300;
   roarGain=actx.createGain(); roarGain.gain.value=0;
-  src.connect(lp).connect(lp2).connect(roarGain).connect(fireBus);
+  src.connect(lp).connect(lp2).connect(roarGain).connect(roarBus);
   src.start();
 }
 /* ロアの揺らぎ：100msごとに火力×ランダムでゲインを揺らして「ぼうっ…ぼうっ」と脈打たせる */
@@ -1803,8 +1809,9 @@ function pop(time, loud){
   bp.frequency.value=1400+Math.random()*2600;
   bp.Q.value=1.2;
   const g=actx.createGain();
-  g.gain.value=(loud?0.45:0.1+Math.random()*0.2);
-  o.connect(bp).connect(g).connect(fireBus);
+  const popLevel = spatialOn ? 0.9 : 1;
+  g.gain.value=(loud?0.45:0.1+Math.random()*0.2)*popLevel;
+  o.connect(bp).connect(g).connect(crackleBus);
   o.start(time);
 }
 function thud(){
@@ -1818,7 +1825,7 @@ function thud(){
   const lp=actx.createBiquadFilter();
   lp.type='lowpass'; lp.frequency.value=170;
   const g=actx.createGain(); g.gain.value=0.35;
-  o.connect(lp).connect(g).connect(fireBus);
+  o.connect(lp).connect(g).connect(thudBus);
   o.start();
 }
 function scheduleCrackle(){
