@@ -36,6 +36,7 @@
   html.debug-viewport-legacy{--app-w:100vw;--app-h:100vh}
   *{margin:0;padding:0;box-sizing:border-box}
   html,body{height:100%;overflow:hidden;background:var(--night)}
+  html.is-ipad,html.is-ipad body{-webkit-text-size-adjust:100%;overscroll-behavior:none}
   body{
     font-family:"Hiragino Mincho ProN","Yu Mincho","Noto Serif JP",serif;
     color:var(--paper);
@@ -119,6 +120,7 @@
   .btn:disabled{cursor:not-allowed;color:rgba(154,143,134,.45);border-color:rgba(154,143,134,.16)}
   .icon-btn{min-width:44px;padding:12px 14px;letter-spacing:0;text-align:center}
   .zoom-reset{min-width:54px}
+  html.is-ipad .ui,html.is-ipad .btn,html.is-ipad .controls{touch-action:manipulation}
 
   /* Debug: backdrop-filter can create an extra GPU compositing layer over Canvas on Chrome Android. */
   html.debug-no-backdrop .affiliate,
@@ -231,6 +233,30 @@ function debugChoice(name, choices, fallback){
   const value = debugQuery.get(name);
   return choices.includes(value) ? value : fallback;
 }
+function isIPadLike(){
+  const ua = navigator.userAgent || '';
+  return /iPad/i.test(ua) || (/Macintosh/i.test(ua) && navigator.maxTouchPoints > 1);
+}
+const IS_IPAD = isIPadLike();
+document.documentElement.classList.toggle('is-ipad', IS_IPAD);
+function installIPadTapGuards(){
+  if(!IS_IPAD) return;
+  let lastTapTime=0, lastTapX=0, lastTapY=0;
+  document.addEventListener('touchend', e=>{
+    if(e.changedTouches.length!==1) return;
+    const touch=e.changedTouches[0];
+    const now=Date.now();
+    const closeInTime=now-lastTapTime<360;
+    const closeInSpace=Math.hypot(touch.clientX-lastTapX, touch.clientY-lastTapY)<36;
+    if(closeInTime && closeInSpace){
+      e.preventDefault();
+    }
+    lastTapTime=now;
+    lastTapX=touch.clientX;
+    lastTapY=touch.clientY;
+  }, {passive:false, capture:true});
+}
+installIPadTapGuards();
 function isAndroidGoogleChrome(){
   const uaData = navigator.userAgentData;
   if(uaData){
@@ -1724,6 +1750,21 @@ const ROAR_AIR_STEREO_ON=AUDIO_DEPTH_CONFIG.roarAirStereo;
 /* Future: pop generation and virtual mic math could move to AudioWorklet for stronger background stability. */
 function clamp(v,min,max){return Math.max(min, Math.min(max, v))}
 function randRange(min,max){return min+Math.random()*(max-min)}
+function smoothLoopBuffer(data, sampleRate, fadeSeconds){
+  const n=data.length;
+  const fade=Math.min(Math.floor(sampleRate*fadeSeconds), Math.floor(n*0.25));
+  if(fade<2) return;
+  for(let i=0;i<fade;i++){
+    const a=0.5-0.5*Math.cos(Math.PI*i/(fade-1));
+    const tailIndex=n-fade+i;
+    data[tailIndex]=data[tailIndex]*(1-a)+data[i]*a;
+  }
+  const start=data[0], end=data[n-1], diff=end-start;
+  if(Math.abs(diff)>1e-6){
+    for(let i=0;i<n;i++) data[i]-=diff*(i/(n-1));
+  }
+  data[n-1]=data[0];
+}
 function setAudioParam(param, value, ramp=0.28){
   if(!actx || !param) return;
   const now=actx.currentTime;
@@ -1818,6 +1859,26 @@ function debugAudioState(){
   if(!actx) return;
   console.debug('[enso audio]', 'AudioContext state:', actx.state, 'time:', actx.currentTime.toFixed(3));
 }
+function restartAudioSchedulers(){
+  if(!actx || !audioOn || actx.state!=='running') return;
+  clearTimeout(crackleTimer);
+  clearTimeout(roarTimer);
+  stopScheduledCrackles();
+  nextCrackleTime=actx.currentTime+0.05;
+  scheduleCrackleAhead();
+  roarLoop();
+}
+function handleAudioStateChange(){
+  debugAudioState();
+  if(actx && audioOn && actx.state==='running') restartAudioSchedulers();
+}
+async function resumeAudioIfNeeded(){
+  if(!actx || actx.state==='running') return;
+  try{
+    await actx.resume();
+  }catch(_){}
+  if(actx.state==='running') restartAudioSchedulers();
+}
 function connectVirtualCrackle(source, x, y, z){
   const dL=Math.hypot(x-LEFT_MIC_X, y, z-MIC_Z);
   const dR=Math.hypot(x-RIGHT_MIC_X, y, z-MIC_Z);
@@ -1888,12 +1949,13 @@ function stopScheduledCrackles(){
 }
 function initAudio(){
   actx=new (window.AudioContext||window.webkitAudioContext)();
-  actx.addEventListener('statechange', debugAudioState);
+  actx.addEventListener('statechange', handleAudioStateChange);
   debugAudioState();
   setupAudioBuses();
 
   /* 炎のロア：低域の芯は中央dry、中高域だけ薄く左右マイク風に広げる */
-  const len=actx.sampleRate*3;
+  const roarSeconds=IS_IPAD ? 8 : 3;
+  const len=Math.floor(actx.sampleRate*roarSeconds);
   const buf=actx.createBuffer(1,len,actx.sampleRate);
   const d=buf.getChannelData(0);
   let last=0;
@@ -1902,6 +1964,7 @@ function initAudio(){
     last=(last+0.02*w)/1.02;
     d[i]=last*3.5;
   }
+  smoothLoopBuffer(d, actx.sampleRate, IS_IPAD ? 0.55 : 0.25);
   const src=actx.createBufferSource();
   src.buffer=buf; src.loop=true;
   const coreLp=actx.createBiquadFilter();
@@ -1995,7 +2058,8 @@ const spatialBtn=document.getElementById('spatial');
 soundBtn.addEventListener('click',async e=>{
   e.stopPropagation();
   if(!actx) initAudio();
-  if(actx.state==='suspended') await actx.resume();
+  if(actx.state!=='running') await resumeAudioIfNeeded();
+  if(actx.state!=='running') return;
   audioOn=!audioOn;
   soundBtn.textContent = audioOn?'音 ON':'音 OFF';
   soundBtn.setAttribute('aria-pressed',audioOn);
@@ -2022,6 +2086,12 @@ spatialBtn.addEventListener('click', e=>{
   applySpatialMode();
 });
 updateSpatialButton();
+document.addEventListener('visibilitychange',()=>{
+  if(!document.hidden && audioOn) resumeAudioIfNeeded();
+});
+window.addEventListener('pageshow',()=>{
+  if(audioOn) resumeAudioIfNeeded();
+});
 
 /* ---------- 画面維持 ---------- */
 const awakeBtn=document.getElementById('awake');
