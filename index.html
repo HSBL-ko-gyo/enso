@@ -2045,6 +2045,7 @@ function cleanupCrackle(entry){
   try{
     entry.source.disconnect();
     entry.bp.disconnect();
+    if(entry.tone) entry.tone.disconnect();
     entry.gain.disconnect();
     entry.nodes.forEach(n=>n.disconnect());
   }catch(_){}
@@ -2133,6 +2134,11 @@ function roarLoop(){
   roarTimer=setTimeout(roarLoop, 90+Math.random()*120);
 }
 function pop(time, loud){
+  const popLevel = spatialOn ? AUDIO_DEPTH_CONFIG.popLevel : 1;
+  const baseLevel=loud ? 0.36 : 0.078+Math.random()*0.15;
+  const microThreshold=MOBILE_AUDIO_SAFE ? 0.125 : 0.112;
+  if(!loud && baseLevel<microThreshold && Math.random()<0.7) return;
+  const level=Math.max(baseLevel, loud ? baseLevel : microThreshold*0.92)*popLevel*(MOBILE_AUDIO_SAFE ? 0.94 : 1);
   const o=actx.createBufferSource();
   const n=Math.floor(actx.sampleRate*(MOBILE_AUDIO_SAFE ? 0.052 : 0.04));
   const b=actx.createBuffer(1,n,actx.sampleRate);
@@ -2156,9 +2162,11 @@ function pop(time, loud){
   bp.type='bandpass';
   bp.frequency.value=MOBILE_AUDIO_SAFE ? 1100+Math.random()*1800 : 1300+Math.random()*2300;
   bp.Q.value=MOBILE_AUDIO_SAFE ? 0.72 : 0.9;
+  const tone=actx.createBiquadFilter();
+  tone.type='lowpass';
+  tone.frequency.value=MOBILE_AUDIO_SAFE ? 2600 : 3400;
+  tone.Q.value=0.45;
   const g=actx.createGain();
-  const popLevel = spatialOn ? AUDIO_DEPTH_CONFIG.popLevel : 1;
-  const level=(loud?0.36:0.078+Math.random()*0.15)*popLevel*(MOBILE_AUDIO_SAFE ? 0.94 : 1);
   const startTime=Number.isFinite(time) ? time : actx.currentTime;
   const duration=n/actx.sampleRate;
   g.gain.setValueAtTime(0, Math.max(actx.currentTime, startTime-0.008));
@@ -2166,7 +2174,7 @@ function pop(time, loud){
   g.gain.linearRampToValueAtTime(level, startTime+attackTime);
   g.gain.setValueAtTime(level, startTime+duration*0.5);
   g.gain.linearRampToValueAtTime(0, startTime+duration);
-  o.connect(bp).connect(g).connect(crackleBus);
+  o.connect(bp).connect(tone).connect(g).connect(crackleBus);
   const z=randRange(AUDIO_DEPTH_CONFIG.zMin,AUDIO_DEPTH_CONFIG.zMax)+crackleDepthWander(startTime);
   const micNodes=spatialOn ? connectVirtualCrackle(
       g,
@@ -2174,7 +2182,7 @@ function pop(time, loud){
       randRange(AUDIO_DEPTH_CONFIG.yMin,AUDIO_DEPTH_CONFIG.yMax),
       clamp(z, AUDIO_DEPTH_CONFIG.zMin-AUDIO_DEPTH_CONFIG.depthWander, AUDIO_DEPTH_CONFIG.zMax+AUDIO_DEPTH_CONFIG.depthWander)
     ) : [];
-  const entry={source:o,bp,gain:g,nodes:micNodes,startTime,duration,cleanupTimer:null};
+  const entry={source:o,bp,tone,gain:g,nodes:micNodes,startTime,duration,cleanupTimer:null};
   scheduledCrackles.add(entry);
   o.addEventListener('ended',()=>{
     clearTimeout(entry.cleanupTimer);
