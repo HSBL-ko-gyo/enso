@@ -1711,6 +1711,7 @@ updateZoomButtons();
 /* ---------- 音：パチパチ＋ぼうぼうの低音ロア ---------- */
 let actx=null, audioOn=false, spatialOn=false, roarCoreGain=null, roarAirGain=null, roarTimer=null;
 let crackleTimer=null, nextCrackleTime=0;
+let lastAudioRestartAt=0;
 let outputGain=null, roarBus=null, roarAirBus=null, crackleBus=null, thudBus=null;
 let roarAirDryGain=null, roarAirStereoGain=null, crackleDryGain=null, crackleSpatialGain=null, roarAirStereoNodes=null;
 const scheduledCrackles=new Set();
@@ -1718,6 +1719,7 @@ const LEFT_MIC_X=-0.09;
 const RIGHT_MIC_X=0.09;
 const MIC_Z=0;
 const SPEED_OF_SOUND=343;
+const MOBILE_AUDIO_SAFE = IS_IPAD || /Android|iPhone|iPod/i.test(navigator.userAgent || '') || (navigator.maxTouchPoints > 1 && innerWidth < 900);
 const SPATIAL_STORAGE_KEY='ensoSpatialAudioMode';
 const SPATIAL_MODE_ORDER=['off','near','mid','far'];
 const SPATIAL_MODE_LABELS={off:'OFF', near:'近', mid:'中', far:'遠'};
@@ -1761,9 +1763,10 @@ const AUDIO_DEPTH_SETTINGS = {
   }
 };
 let AUDIO_DEPTH_CONFIG = AUDIO_DEPTH_SETTINGS[AUDIO_DEPTH];
-const CRACKLE_SCHEDULE_AHEAD=6.0;
-const CRACKLE_SCHEDULER_INTERVAL=1000;
-const CRACKLE_TAIL_CLEANUP_MS=180;
+const CRACKLE_SCHEDULE_AHEAD=MOBILE_AUDIO_SAFE ? 3.2 : 6.0;
+const CRACKLE_SCHEDULER_INTERVAL=MOBILE_AUDIO_SAFE ? 650 : 1000;
+const CRACKLE_TAIL_CLEANUP_MS=MOBILE_AUDIO_SAFE ? 260 : 180;
+const MAX_SCHEDULED_CRACKLES=MOBILE_AUDIO_SAFE ? 42 : 90;
 /* Future: pop generation and virtual mic math could move to AudioWorklet for stronger background stability. */
 function clamp(v,min,max){return Math.max(min, Math.min(max, v))}
 function randRange(min,max){return min+Math.random()*(max-min)}
@@ -1918,10 +1921,13 @@ function debugAudioState(){
 }
 function restartAudioSchedulers(){
   if(!actx || !audioOn || actx.state!=='running') return;
+  const now=actx.currentTime;
+  if(now-lastAudioRestartAt<0.25) return;
+  lastAudioRestartAt=now;
   clearTimeout(crackleTimer);
   clearTimeout(roarTimer);
   stopScheduledCrackles();
-  nextCrackleTime=actx.currentTime+0.05;
+  nextCrackleTime=now+0.05;
   scheduleCrackleAhead();
   roarLoop();
 }
@@ -1947,13 +1953,6 @@ function connectVirtualCrackle(source, x, y, z){
   const lGain=actx.createGain();
   const rGain=actx.createGain();
   const merger=actx.createChannelMerger(2);
-  const erMerger=actx.createChannelMerger(2);
-  const erLDelay=actx.createDelay(0.05);
-  const erRDelay=actx.createDelay(0.05);
-  const erLFilter=actx.createBiquadFilter();
-  const erRFilter=actx.createBiquadFilter();
-  const erLGain=actx.createGain();
-  const erRGain=actx.createGain();
   const delayDiff=Math.min(Math.abs(dL-dR)/SPEED_OF_SOUND, AUDIO_DEPTH_CONFIG.maxDelay);
   const farL=dL>dR;
   const distanceAtten=clamp(AUDIO_DEPTH_CONFIG.distanceRef/avg, AUDIO_DEPTH_CONFIG.attenMin, AUDIO_DEPTH_CONFIG.attenMax);
@@ -1969,24 +1968,35 @@ function connectVirtualCrackle(source, x, y, z){
   rFilter.Q.value=0.55;
   lGain.gain.value=clamp(Math.pow(avg/dL,0.35),0.94,1.06)*distanceAtten;
   rGain.gain.value=clamp(Math.pow(avg/dR,0.35),0.94,1.06)*distanceAtten;
-  erLDelay.delayTime.value=AUDIO_DEPTH_CONFIG.earlyL+randRange(-0.003,0.003);
-  erRDelay.delayTime.value=AUDIO_DEPTH_CONFIG.earlyR+randRange(-0.003,0.003);
-  erLFilter.type='lowpass';
-  erRFilter.type='lowpass';
-  erLFilter.frequency.value=AUDIO_DEPTH_CONFIG.earlyCut*belowCut;
-  erRFilter.frequency.value=AUDIO_DEPTH_CONFIG.earlyCut*0.9*belowCut;
-  erLFilter.Q.value=0.45;
-  erRFilter.Q.value=0.45;
-  erLGain.gain.value=AUDIO_DEPTH_CONFIG.earlyGain*distanceAtten;
-  erRGain.gain.value=AUDIO_DEPTH_CONFIG.earlyGain*0.9*distanceAtten;
 
   source.connect(lGain).connect(lDelay).connect(lFilter).connect(merger,0,0);
   source.connect(rGain).connect(rDelay).connect(rFilter).connect(merger,0,1);
   merger.connect(crackleSpatialGain).connect(outputGain);
-  source.connect(erLDelay).connect(erLFilter).connect(erLGain).connect(erMerger,0,0);
-  source.connect(erRDelay).connect(erRFilter).connect(erRGain).connect(erMerger,0,1);
-  erMerger.connect(crackleSpatialGain).connect(outputGain);
-  return [lDelay,rDelay,lFilter,rFilter,lGain,rGain,merger,erLDelay,erRDelay,erLFilter,erRFilter,erLGain,erRGain,erMerger];
+  const nodes=[lDelay,rDelay,lFilter,rFilter,lGain,rGain,merger];
+  if(!MOBILE_AUDIO_SAFE){
+    const erMerger=actx.createChannelMerger(2);
+    const erLDelay=actx.createDelay(0.05);
+    const erRDelay=actx.createDelay(0.05);
+    const erLFilter=actx.createBiquadFilter();
+    const erRFilter=actx.createBiquadFilter();
+    const erLGain=actx.createGain();
+    const erRGain=actx.createGain();
+    erLDelay.delayTime.value=AUDIO_DEPTH_CONFIG.earlyL+randRange(-0.003,0.003);
+    erRDelay.delayTime.value=AUDIO_DEPTH_CONFIG.earlyR+randRange(-0.003,0.003);
+    erLFilter.type='lowpass';
+    erRFilter.type='lowpass';
+    erLFilter.frequency.value=AUDIO_DEPTH_CONFIG.earlyCut*belowCut;
+    erRFilter.frequency.value=AUDIO_DEPTH_CONFIG.earlyCut*0.9*belowCut;
+    erLFilter.Q.value=0.45;
+    erRFilter.Q.value=0.45;
+    erLGain.gain.value=AUDIO_DEPTH_CONFIG.earlyGain*distanceAtten;
+    erRGain.gain.value=AUDIO_DEPTH_CONFIG.earlyGain*0.9*distanceAtten;
+    source.connect(erLDelay).connect(erLFilter).connect(erLGain).connect(erMerger,0,0);
+    source.connect(erRDelay).connect(erRFilter).connect(erRGain).connect(erMerger,0,1);
+    erMerger.connect(crackleSpatialGain).connect(outputGain);
+    nodes.push(erLDelay,erRDelay,erLFilter,erRFilter,erLGain,erRGain,erMerger);
+  }
+  return nodes;
 }
 function cleanupCrackle(entry){
   if(!entry || !scheduledCrackles.has(entry)) return;
@@ -2025,6 +2035,18 @@ function stopScheduledCrackles(fade=false){
   if(!actx) return;
   for(const entry of [...scheduledCrackles]){
     stopCrackleEntry(entry, fade);
+  }
+}
+function trimScheduledCrackles(){
+  if(!actx || scheduledCrackles.size<=MAX_SCHEDULED_CRACKLES) return;
+  const now=actx.currentTime;
+  const entries=[...scheduledCrackles].sort((a,b)=>a.startTime-b.startTime);
+  const removeCount=scheduledCrackles.size-MAX_SCHEDULED_CRACKLES;
+  for(let i=0;i<removeCount;i++){
+    const entry=entries[i];
+    if(entry.startTime>now+0.04){
+      stopCrackleEntry(entry, false);
+    }
   }
 }
 function initAudio(){
@@ -2075,7 +2097,7 @@ function pop(time, loud){
   const n=actx.sampleRate*0.03;
   const b=actx.createBuffer(1,n,actx.sampleRate);
   const d=b.getChannelData(0);
-  const attack=Math.max(1, Math.floor(actx.sampleRate*0.0025));
+  const attack=Math.max(1, Math.floor(actx.sampleRate*(MOBILE_AUDIO_SAFE ? 0.005 : 0.0025)));
   for(let i=0;i<n;i++){
     const a=i<attack ? i/attack : 1;
     d[i]=(Math.random()*2-1)*a*Math.pow(1-i/n,2.5);
@@ -2091,7 +2113,8 @@ function pop(time, loud){
   const startTime=Number.isFinite(time) ? time : actx.currentTime;
   const duration=n/actx.sampleRate;
   g.gain.setValueAtTime(0, Math.max(actx.currentTime, startTime-0.004));
-  g.gain.linearRampToValueAtTime(level, startTime+0.004);
+  const attackTime=MOBILE_AUDIO_SAFE ? 0.008 : 0.004;
+  g.gain.linearRampToValueAtTime(level, startTime+attackTime);
   g.gain.setValueAtTime(level, startTime+duration*0.55);
   g.gain.linearRampToValueAtTime(0, startTime+duration);
   o.connect(bp).connect(g).connect(crackleBus);
@@ -2127,7 +2150,7 @@ function randomCrackleInterval(){
   return 0.18 + Math.random() * (0.95 / (0.4 + intensity));
 }
 function scheduleCrackleAhead(){
-  if(!audioOn||!actx)return;
+  if(!audioOn||!actx||actx.state!=='running')return;
   const now=actx.currentTime;
   const horizon=now+CRACKLE_SCHEDULE_AHEAD;
   if(!Number.isFinite(nextCrackleTime) || nextCrackleTime<now){
@@ -2138,6 +2161,7 @@ function scheduleCrackleAhead(){
     for(let i=0;i<count;i++) pop(nextCrackleTime+Math.random()*0.18,false);
     nextCrackleTime+=randomCrackleInterval();
   }
+  trimScheduledCrackles();
   clearTimeout(crackleTimer);
   crackleTimer=setTimeout(scheduleCrackleAhead, CRACKLE_SCHEDULER_INTERVAL);
 }
