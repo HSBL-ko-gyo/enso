@@ -1748,29 +1748,43 @@ const AUDIO_DEPTH_SETTINGS = {
     xRange:0.34, yMin:-0.28, yMax:-0.08, zMin:-1.45, zMax:-1.05, maxDelay:0.00105,
     distanceRef:1.45, attenMin:0.9, attenMax:1.03, closeCut:6800, farCut:4000,
     crackleDry:0.46, crackleSpatial:0.76, popLevel:1,
-    roarAirDry:0.56, roarAirStereo:0.38, earlyGain:0.025, earlyL:0.012, earlyR:0.019, earlyCut:6800
+    roarAirDry:0.56, roarAirStereo:0.38, earlyGain:0.025, earlyL:0.012, earlyR:0.019, earlyCut:6800,
+    depthWander:0.22
   },
   mid:{
     xRange:0.44, yMin:-0.42, yMax:-0.18, zMin:-3.5, zMax:-2.6, maxDelay:0.00065,
     distanceRef:1.45, attenMin:0.58, attenMax:0.74, closeCut:4200, farCut:2400,
     crackleDry:0.22, crackleSpatial:0.58, popLevel:0.8,
-    roarAirDry:0.36, roarAirStereo:0.46, earlyGain:0.075, earlyL:0.025, earlyR:0.037, earlyCut:3900
+    roarAirDry:0.36, roarAirStereo:0.46, earlyGain:0.075, earlyL:0.025, earlyR:0.037, earlyCut:3900,
+    depthWander:0.25
   },
   far:{
     xRange:0.56, yMin:-0.62, yMax:-0.28, zMin:-6.0, zMax:-4.0, maxDelay:0.00045,
     distanceRef:1.4, attenMin:0.4, attenMax:0.58, closeCut:3000, farCut:1700,
     crackleDry:0.09, crackleSpatial:0.52, popLevel:0.66,
-    roarAirDry:0.26, roarAirStereo:0.46, earlyGain:0.12, earlyL:0.034, earlyR:0.05, earlyCut:3000
+    roarAirDry:0.26, roarAirStereo:0.46, earlyGain:0.12, earlyL:0.034, earlyR:0.05, earlyCut:3000,
+    depthWander:0.25
   }
 };
 let AUDIO_DEPTH_CONFIG = AUDIO_DEPTH_SETTINGS[AUDIO_DEPTH];
 const CRACKLE_SCHEDULE_AHEAD=MOBILE_AUDIO_SAFE ? 3.2 : 6.0;
 const CRACKLE_SCHEDULER_INTERVAL=MOBILE_AUDIO_SAFE ? 650 : 1000;
-const CRACKLE_TAIL_CLEANUP_MS=MOBILE_AUDIO_SAFE ? 260 : 180;
+const CRACKLE_TAIL_CLEANUP_MS=MOBILE_AUDIO_SAFE ? 420 : 260;
 const MAX_SCHEDULED_CRACKLES=MOBILE_AUDIO_SAFE ? 42 : 90;
+const DEPTH_WANDER_SEED=Math.random()*Math.PI*2;
 /* Future: pop generation and virtual mic math could move to AudioWorklet for stronger background stability. */
 function clamp(v,min,max){return Math.max(min, Math.min(max, v))}
 function randRange(min,max){return min+Math.random()*(max-min)}
+function crackleDepthWander(time){
+  const cfg=AUDIO_DEPTH_CONFIG;
+  const amount=cfg.depthWander || 0;
+  if(!spatialOn || amount<=0) return 0;
+  const t=Number.isFinite(time) ? time : (actx ? actx.currentTime : 0);
+  return amount * (
+    Math.sin(t*0.21 + DEPTH_WANDER_SEED)*0.72 +
+    Math.sin(t*0.07 + DEPTH_WANDER_SEED*0.37)*0.28
+  );
+}
 function smoothLoopBuffer(data, sampleRate, fadeSeconds){
   const n=data.length;
   const fade=Math.min(Math.floor(sampleRate*fadeSeconds), Math.floor(n*0.25));
@@ -1911,7 +1925,7 @@ function setSpatialMode(nextMode, persist=true){
   applySpatialMode();
   if(audioOn && actx && actx.state==='running'){
     stopScheduledCrackles(true);
-    nextCrackleTime=actx.currentTime+0.12;
+    nextCrackleTime=actx.currentTime+0.24;
     scheduleCrackleAhead();
   }
 }
@@ -1930,15 +1944,15 @@ function restartAudioSchedulers(){
   lastAudioRestartAt=now;
   clearTimeout(crackleTimer);
   clearTimeout(roarTimer);
-  stopScheduledCrackles();
-  nextCrackleTime=now+0.18;
+  stopScheduledCrackles(true);
+  nextCrackleTime=now+0.28;
   scheduleCrackleAhead();
   roarLoop();
 }
 function setCrackleVisibilityMuted(muted){
   cracklesMutedForVisibility=muted;
   if(!actx || !crackleOutputGain) return;
-  setAudioParam(crackleOutputGain.gain, muted ? 0 : 1, muted ? 0.08 : 0.18);
+  setAudioParam(crackleOutputGain.gain, muted ? 0 : 1, muted ? 0.12 : 0.28);
 }
 function handleAudioVisibilityChange(){
   if(!audioOn || !actx) return;
@@ -1952,7 +1966,7 @@ function handleAudioVisibilityChange(){
     setCrackleVisibilityMuted(false);
     resumeAudioIfNeeded();
     if(actx.state==='running'){
-      nextCrackleTime=actx.currentTime+0.18;
+      nextCrackleTime=actx.currentTime+0.28;
       scheduleCrackleAhead();
     }
   }
@@ -2047,8 +2061,8 @@ function stopCrackleEntry(entry, fade=false){
         entry.gain.gain.cancelScheduledValues(now);
         entry.gain.gain.setValueAtTime(current, now);
       }
-      entry.gain.gain.linearRampToValueAtTime(0, now+0.035);
-      entry.source.stop(now+0.05);
+      entry.gain.gain.linearRampToValueAtTime(0, now+0.075);
+      entry.source.stop(now+0.095);
     }catch(_){}
     clearTimeout(entry.cleanupTimer);
     entry.cleanupTimer=setTimeout(()=>cleanupCrackle(entry), CRACKLE_TAIL_CLEANUP_MS);
@@ -2120,14 +2134,20 @@ function roarLoop(){
 }
 function pop(time, loud){
   const o=actx.createBufferSource();
-  const n=Math.floor(actx.sampleRate*(MOBILE_AUDIO_SAFE ? 0.04 : 0.034));
+  const n=Math.floor(actx.sampleRate*(MOBILE_AUDIO_SAFE ? 0.052 : 0.04));
   const b=actx.createBuffer(1,n,actx.sampleRate);
   const d=b.getChannelData(0);
-  const attack=Math.max(1, Math.floor(actx.sampleRate*(MOBILE_AUDIO_SAFE ? 0.008 : 0.004)));
+  const attack=Math.max(1, Math.floor(actx.sampleRate*(MOBILE_AUDIO_SAFE ? 0.014 : 0.008)));
+  const release=Math.max(1, Math.floor(actx.sampleRate*(MOBILE_AUDIO_SAFE ? 0.018 : 0.012)));
+  const releaseStart=Math.max(0, n-release);
+  let last=0;
   for(let i=0;i<n;i++){
+    last=last*0.24+(Math.random()*2-1)*0.76;
     const a=i<attack ? 0.5-0.5*Math.cos(Math.PI*i/attack) : 1;
-    const tail=Math.pow(1-i/n, MOBILE_AUDIO_SAFE ? 2.8 : 2.5);
-    d[i]=(Math.random()*2-1)*a*tail;
+    const rt=i>=releaseStart ? (i-releaseStart)/Math.max(1, release-1) : 0;
+    const r=i>=releaseStart ? 0.5+0.5*Math.cos(Math.PI*rt) : 1;
+    const tail=Math.pow(1-i/n, MOBILE_AUDIO_SAFE ? 2.25 : 2.05);
+    d[i]=last*a*r*tail;
   }
   d[0]=0;
   d[n-1]=0;
@@ -2138,20 +2158,21 @@ function pop(time, loud){
   bp.Q.value=MOBILE_AUDIO_SAFE ? 0.72 : 0.9;
   const g=actx.createGain();
   const popLevel = spatialOn ? AUDIO_DEPTH_CONFIG.popLevel : 1;
-  const level=(loud?0.38:0.085+Math.random()*0.17)*popLevel;
+  const level=(loud?0.36:0.078+Math.random()*0.15)*popLevel*(MOBILE_AUDIO_SAFE ? 0.94 : 1);
   const startTime=Number.isFinite(time) ? time : actx.currentTime;
   const duration=n/actx.sampleRate;
-  g.gain.setValueAtTime(0, Math.max(actx.currentTime, startTime-0.006));
-  const attackTime=MOBILE_AUDIO_SAFE ? 0.012 : 0.006;
+  g.gain.setValueAtTime(0, Math.max(actx.currentTime, startTime-0.008));
+  const attackTime=MOBILE_AUDIO_SAFE ? 0.018 : 0.01;
   g.gain.linearRampToValueAtTime(level, startTime+attackTime);
   g.gain.setValueAtTime(level, startTime+duration*0.5);
   g.gain.linearRampToValueAtTime(0, startTime+duration);
   o.connect(bp).connect(g).connect(crackleBus);
+  const z=randRange(AUDIO_DEPTH_CONFIG.zMin,AUDIO_DEPTH_CONFIG.zMax)+crackleDepthWander(startTime);
   const micNodes=spatialOn ? connectVirtualCrackle(
       g,
       randRange(-AUDIO_DEPTH_CONFIG.xRange,AUDIO_DEPTH_CONFIG.xRange),
       randRange(AUDIO_DEPTH_CONFIG.yMin,AUDIO_DEPTH_CONFIG.yMax),
-      randRange(AUDIO_DEPTH_CONFIG.zMin,AUDIO_DEPTH_CONFIG.zMax)
+      clamp(z, AUDIO_DEPTH_CONFIG.zMin-AUDIO_DEPTH_CONFIG.depthWander, AUDIO_DEPTH_CONFIG.zMax+AUDIO_DEPTH_CONFIG.depthWander)
     ) : [];
   const entry={source:o,bp,gain:g,nodes:micNodes,startTime,duration,cleanupTimer:null};
   scheduledCrackles.add(entry);
@@ -2213,8 +2234,8 @@ soundBtn.addEventListener('click',async e=>{
   clearTimeout(crackleTimer);
   if(audioOn){
     setCrackleVisibilityMuted(document.hidden);
-    setAudioParam(outputGain.gain, 1, 0.18);
-    nextCrackleTime=actx.currentTime+0.18;
+    setAudioParam(outputGain.gain, 1, 0.22);
+    nextCrackleTime=actx.currentTime+0.28;
     scheduleCrackleAhead();
     roarLoop();
   }else{
