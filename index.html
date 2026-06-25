@@ -207,7 +207,7 @@
       <button class="btn" id="auto" aria-pressed="false">自動でくべる OFF</button>
       <button class="btn" id="star" aria-pressed="true">星 ON</button>
       <button class="btn" id="sound" aria-pressed="false">音 OFF</button>
-      <button class="btn" id="spatial" aria-pressed="false" aria-label="焚き火音を少し奥に配置する">立体音 OFF</button>
+      <button class="btn" id="spatial" aria-pressed="true" aria-label="焚き火音の距離を切り替える">立体音 遠</button>
       <button class="btn icon-btn" id="zoomOut" aria-label="火を小さくする">-</button>
       <button class="btn icon-btn zoom-reset" id="zoomReset" aria-label="火の大きさを戻す">1x</button>
       <button class="btn icon-btn" id="zoomIn" aria-label="火を大きくする">+</button>
@@ -1712,13 +1712,34 @@ updateZoomButtons();
 let actx=null, audioOn=false, spatialOn=false, roarCoreGain=null, roarAirGain=null, roarTimer=null;
 let crackleTimer=null, nextCrackleTime=0;
 let outputGain=null, roarBus=null, roarAirBus=null, crackleBus=null, thudBus=null;
-let roarAirDryGain=null, roarAirStereoGain=null, crackleDryGain=null, crackleSpatialGain=null;
+let roarAirDryGain=null, roarAirStereoGain=null, crackleDryGain=null, crackleSpatialGain=null, roarAirStereoNodes=null;
 const scheduledCrackles=new Set();
 const LEFT_MIC_X=-0.09;
 const RIGHT_MIC_X=0.09;
 const MIC_Z=0;
 const SPEED_OF_SOUND=343;
-const AUDIO_DEPTH = debugQuery.has('audioDepth') ? debugChoice('audioDepth', ['near','mid','far'], 'far') : 'far';
+const SPATIAL_STORAGE_KEY='ensoSpatialAudioMode';
+const SPATIAL_MODE_ORDER=['off','near','mid','far'];
+const SPATIAL_MODE_LABELS={off:'OFF', near:'近', mid:'中', far:'遠'};
+function readStoredSpatialMode(){
+  try{
+    const value=localStorage.getItem(SPATIAL_STORAGE_KEY);
+    return SPATIAL_MODE_ORDER.includes(value) ? value : null;
+  }catch(_){
+    return null;
+  }
+}
+function writeStoredSpatialMode(value){
+  try{
+    localStorage.setItem(SPATIAL_STORAGE_KEY, value);
+  }catch(_){}
+}
+const INITIAL_SPATIAL_MODE = debugQuery.has('audioDepth') ?
+  debugChoice('audioDepth', SPATIAL_MODE_ORDER, 'far') :
+  (readStoredSpatialMode() || 'far');
+let spatialMode=INITIAL_SPATIAL_MODE;
+spatialOn=spatialMode!=='off';
+let AUDIO_DEPTH = spatialOn ? spatialMode : 'far';
 const AUDIO_DEPTH_SETTINGS = {
   near:{
     xRange:0.28, zMin:-1.75, zMax:-1.25, maxDelay:0.00085,
@@ -1739,14 +1760,9 @@ const AUDIO_DEPTH_SETTINGS = {
     roarAirDry:0.36, roarAirStereo:0.5, earlyGain:0.13, earlyL:0.026, earlyR:0.036, earlyCut:3900
   }
 };
-const AUDIO_DEPTH_CONFIG = AUDIO_DEPTH_SETTINGS[AUDIO_DEPTH];
-const MAX_MIC_DELAY=AUDIO_DEPTH_CONFIG.maxDelay;
+let AUDIO_DEPTH_CONFIG = AUDIO_DEPTH_SETTINGS[AUDIO_DEPTH];
 const CRACKLE_SCHEDULE_AHEAD=6.0;
 const CRACKLE_SCHEDULER_INTERVAL=1000;
-const CRACKLE_DRY_ON=AUDIO_DEPTH_CONFIG.crackleDry;
-const CRACKLE_SPATIAL_ON=AUDIO_DEPTH_CONFIG.crackleSpatial;
-const ROAR_AIR_DRY_ON=AUDIO_DEPTH_CONFIG.roarAirDry;
-const ROAR_AIR_STEREO_ON=AUDIO_DEPTH_CONFIG.roarAirStereo;
 /* Future: pop generation and virtual mic math could move to AudioWorklet for stronger background stability. */
 function clamp(v,min,max){return Math.max(min, Math.min(max, v))}
 function randRange(min,max){return min+Math.random()*(max-min)}
@@ -1774,7 +1790,26 @@ function setAudioParam(param, value, ramp=0.28){
     param.cancelScheduledValues(now);
     param.setValueAtTime(param.value, now);
   }
+  if(ramp<=0){
+    param.setValueAtTime(value, now);
+    return;
+  }
   param.linearRampToValueAtTime(value, now+ramp);
+}
+function updateRoarAirStereoShape(ramp=0.28){
+  if(!roarAirStereoNodes) return;
+  const cfg=AUDIO_DEPTH_CONFIG;
+  const far=AUDIO_DEPTH==='far';
+  setAudioParam(roarAirStereoNodes.lFilter.frequency, far ? 1050 : 1250, ramp);
+  setAudioParam(roarAirStereoNodes.rFilter.frequency, far ? 1160 : 1380, ramp);
+  setAudioParam(roarAirStereoNodes.lGain.gain, far ? 0.62 : 0.72, ramp);
+  setAudioParam(roarAirStereoNodes.rGain.gain, far ? 0.6 : 0.7, ramp);
+  setAudioParam(roarAirStereoNodes.erLDelay.delayTime, cfg.earlyL, ramp);
+  setAudioParam(roarAirStereoNodes.erRDelay.delayTime, cfg.earlyR, ramp);
+  setAudioParam(roarAirStereoNodes.erLFilter.frequency, cfg.earlyCut*0.85, ramp);
+  setAudioParam(roarAirStereoNodes.erRFilter.frequency, cfg.earlyCut*0.95, ramp);
+  setAudioParam(roarAirStereoNodes.erLGain.gain, cfg.earlyGain*0.22, ramp);
+  setAudioParam(roarAirStereoNodes.erRGain.gain, cfg.earlyGain*0.2, ramp);
 }
 function connectRoarAirStereo(){
   const merger=actx.createChannelMerger(2);
@@ -1796,20 +1831,12 @@ function connectRoarAirStereo(){
   rDelay.delayTime.value=0.00052;
   lFilter.type='lowpass';
   rFilter.type='lowpass';
-  lFilter.frequency.value=AUDIO_DEPTH==='far'?1050:1250;
-  rFilter.frequency.value=AUDIO_DEPTH==='far'?1160:1380;
   lFilter.Q.value=0.45;
   rFilter.Q.value=0.45;
-  lGain.gain.value=AUDIO_DEPTH==='far'?0.62:0.72;
-  rGain.gain.value=AUDIO_DEPTH==='far'?0.6:0.7;
-  erLDelay.delayTime.value=AUDIO_DEPTH_CONFIG.earlyL;
-  erRDelay.delayTime.value=AUDIO_DEPTH_CONFIG.earlyR;
   erLFilter.type='lowpass';
   erRFilter.type='lowpass';
-  erLFilter.frequency.value=AUDIO_DEPTH_CONFIG.earlyCut*0.85;
-  erRFilter.frequency.value=AUDIO_DEPTH_CONFIG.earlyCut*0.95;
-  erLGain.gain.value=AUDIO_DEPTH_CONFIG.earlyGain*0.22;
-  erRGain.gain.value=AUDIO_DEPTH_CONFIG.earlyGain*0.2;
+  roarAirStereoNodes={lFilter,rFilter,lGain,rGain,erLDelay,erRDelay,erLFilter,erRFilter,erLGain,erRGain};
+  updateRoarAirStereoShape(0);
 
   roarAirBus.connect(lGain).connect(lDelay).connect(lFilter).connect(merger,0,0);
   roarAirBus.connect(rGain).connect(rDelay).connect(rFilter).connect(merger,0,1);
@@ -1835,10 +1862,10 @@ function setupAudioBuses(){
   roarBus.connect(outputGain);
   thudBus.connect(outputGain);
 
-  crackleDryGain.gain.value = spatialOn ? CRACKLE_DRY_ON : 1;
-  crackleSpatialGain.gain.value = spatialOn ? CRACKLE_SPATIAL_ON : 0;
-  roarAirDryGain.gain.value = spatialOn ? ROAR_AIR_DRY_ON : 1;
-  roarAirStereoGain.gain.value = spatialOn ? ROAR_AIR_STEREO_ON : 0;
+  crackleDryGain.gain.value = spatialOn ? AUDIO_DEPTH_CONFIG.crackleDry : 1;
+  crackleSpatialGain.gain.value = spatialOn ? AUDIO_DEPTH_CONFIG.crackleSpatial : 0;
+  roarAirDryGain.gain.value = spatialOn ? AUDIO_DEPTH_CONFIG.roarAirDry : 1;
+  roarAirStereoGain.gain.value = spatialOn ? AUDIO_DEPTH_CONFIG.roarAirStereo : 0;
 
   crackleBus.connect(crackleDryGain).connect(outputGain);
   roarAirBus.connect(roarAirDryGain).connect(outputGain);
@@ -1846,14 +1873,37 @@ function setupAudioBuses(){
 }
 function applySpatialMode(ramp=0.28){
   if(!actx || !crackleDryGain || !crackleSpatialGain || !roarAirDryGain || !roarAirStereoGain) return;
-  setAudioParam(crackleDryGain.gain, spatialOn ? CRACKLE_DRY_ON : 1, ramp);
-  setAudioParam(crackleSpatialGain.gain, spatialOn ? CRACKLE_SPATIAL_ON : 0, ramp);
-  setAudioParam(roarAirDryGain.gain, spatialOn ? ROAR_AIR_DRY_ON : 1, ramp);
-  setAudioParam(roarAirStereoGain.gain, spatialOn ? ROAR_AIR_STEREO_ON : 0, ramp);
+  updateRoarAirStereoShape(ramp);
+  setAudioParam(crackleDryGain.gain, spatialOn ? AUDIO_DEPTH_CONFIG.crackleDry : 1, ramp);
+  setAudioParam(crackleSpatialGain.gain, spatialOn ? AUDIO_DEPTH_CONFIG.crackleSpatial : 0, ramp);
+  setAudioParam(roarAirDryGain.gain, spatialOn ? AUDIO_DEPTH_CONFIG.roarAirDry : 1, ramp);
+  setAudioParam(roarAirStereoGain.gain, spatialOn ? AUDIO_DEPTH_CONFIG.roarAirStereo : 0, ramp);
 }
 function updateSpatialButton(){
-  spatialBtn.textContent = spatialOn ? '立体音 ON' : '立体音 OFF';
+  spatialBtn.textContent = `立体音 ${SPATIAL_MODE_LABELS[spatialMode]}`;
   spatialBtn.setAttribute('aria-pressed', spatialOn);
+  spatialBtn.setAttribute('aria-label', spatialOn ?
+    `焚き火音の距離: ${SPATIAL_MODE_LABELS[spatialMode]}` :
+    '焚き火音の距離処理なし');
+}
+function setSpatialMode(nextMode, persist=true){
+  if(!SPATIAL_MODE_ORDER.includes(nextMode)) nextMode='far';
+  spatialMode=nextMode;
+  spatialOn=spatialMode!=='off';
+  AUDIO_DEPTH=spatialOn ? spatialMode : 'far';
+  AUDIO_DEPTH_CONFIG=AUDIO_DEPTH_SETTINGS[AUDIO_DEPTH];
+  if(persist) writeStoredSpatialMode(spatialMode);
+  updateSpatialButton();
+  applySpatialMode();
+  if(audioOn && actx && actx.state==='running'){
+    stopScheduledCrackles();
+    nextCrackleTime=actx.currentTime+0.05;
+    scheduleCrackleAhead();
+  }
+}
+function nextSpatialMode(){
+  const index=SPATIAL_MODE_ORDER.indexOf(spatialMode);
+  return SPATIAL_MODE_ORDER[(index+1)%SPATIAL_MODE_ORDER.length];
 }
 function debugAudioState(){
   if(!actx) return;
@@ -1897,7 +1947,7 @@ function connectVirtualCrackle(source, x, y, z){
   const erRFilter=actx.createBiquadFilter();
   const erLGain=actx.createGain();
   const erRGain=actx.createGain();
-  const delayDiff=Math.min(Math.abs(dL-dR)/SPEED_OF_SOUND, MAX_MIC_DELAY);
+  const delayDiff=Math.min(Math.abs(dL-dR)/SPEED_OF_SOUND, AUDIO_DEPTH_CONFIG.maxDelay);
   const farL=dL>dR;
   const distanceAtten=clamp(AUDIO_DEPTH_CONFIG.distanceRef/avg, AUDIO_DEPTH_CONFIG.attenMin, AUDIO_DEPTH_CONFIG.attenMax);
 
@@ -2081,9 +2131,7 @@ soundBtn.addEventListener('click',async e=>{
 });
 spatialBtn.addEventListener('click', e=>{
   e.stopPropagation();
-  spatialOn=!spatialOn;
-  updateSpatialButton();
-  applySpatialMode();
+  setSpatialMode(nextSpatialMode());
 });
 updateSpatialButton();
 document.addEventListener('visibilitychange',()=>{
