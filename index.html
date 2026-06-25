@@ -1742,22 +1742,22 @@ spatialOn=spatialMode!=='off';
 let AUDIO_DEPTH = spatialOn ? spatialMode : 'far';
 const AUDIO_DEPTH_SETTINGS = {
   near:{
-    xRange:0.28, zMin:-1.75, zMax:-1.25, maxDelay:0.00085,
-    distanceRef:1.22, attenMin:0.72, attenMax:0.9, closeCut:5200, farCut:3000,
-    crackleDry:0.32, crackleSpatial:0.68, popLevel:0.92,
-    roarAirDry:0.45, roarAirStereo:0.45, earlyGain:0.06, earlyL:0.018, earlyR:0.026, earlyCut:5200
+    xRange:0.34, zMin:-1.45, zMax:-1.05, maxDelay:0.00105,
+    distanceRef:1.45, attenMin:0.9, attenMax:1.03, closeCut:7200, farCut:4300,
+    crackleDry:0.46, crackleSpatial:0.76, popLevel:1,
+    roarAirDry:0.56, roarAirStereo:0.38, earlyGain:0.025, earlyL:0.012, earlyR:0.019, earlyCut:6800
   },
   mid:{
-    xRange:0.36, zMin:-2.4, zMax:-1.7, maxDelay:0.00075,
-    distanceRef:1.75, attenMin:0.74, attenMax:0.88, closeCut:4800, farCut:2800,
-    crackleDry:0.27, crackleSpatial:0.65, popLevel:0.9,
-    roarAirDry:0.4, roarAirStereo:0.48, earlyGain:0.1, earlyL:0.022, earlyR:0.031, earlyCut:4600
+    xRange:0.4, zMin:-2.45, zMax:-1.85, maxDelay:0.00075,
+    distanceRef:1.55, attenMin:0.7, attenMax:0.84, closeCut:5200, farCut:3000,
+    crackleDry:0.28, crackleSpatial:0.64, popLevel:0.88,
+    roarAirDry:0.42, roarAirStereo:0.48, earlyGain:0.09, earlyL:0.021, earlyR:0.032, earlyCut:4700
   },
   far:{
-    xRange:0.45, zMin:-3.6, zMax:-2.4, maxDelay:0.00065,
-    distanceRef:2.45, attenMin:0.75, attenMax:0.88, closeCut:4300, farCut:2500,
-    crackleDry:0.22, crackleSpatial:0.62, popLevel:0.88,
-    roarAirDry:0.36, roarAirStereo:0.5, earlyGain:0.13, earlyL:0.026, earlyR:0.036, earlyCut:3900
+    xRange:0.5, zMin:-4.2, zMax:-3.0, maxDelay:0.00055,
+    distanceRef:1.55, attenMin:0.5, attenMax:0.68, closeCut:3600, farCut:1900,
+    crackleDry:0.12, crackleSpatial:0.56, popLevel:0.74,
+    roarAirDry:0.3, roarAirStereo:0.54, earlyGain:0.2, earlyL:0.03, earlyR:0.044, earlyCut:3300
   }
 };
 let AUDIO_DEPTH_CONFIG = AUDIO_DEPTH_SETTINGS[AUDIO_DEPTH];
@@ -1799,11 +1799,17 @@ function setAudioParam(param, value, ramp=0.28){
 function updateRoarAirStereoShape(ramp=0.28){
   if(!roarAirStereoNodes) return;
   const cfg=AUDIO_DEPTH_CONFIG;
-  const far=AUDIO_DEPTH==='far';
-  setAudioParam(roarAirStereoNodes.lFilter.frequency, far ? 1050 : 1250, ramp);
-  setAudioParam(roarAirStereoNodes.rFilter.frequency, far ? 1160 : 1380, ramp);
-  setAudioParam(roarAirStereoNodes.lGain.gain, far ? 0.62 : 0.72, ramp);
-  setAudioParam(roarAirStereoNodes.rGain.gain, far ? 0.6 : 0.7, ramp);
+  const shape = AUDIO_DEPTH==='near' ?
+    {lCut:1700, rCut:1850, lGain:0.8, rGain:0.78, lDelay:0.00012, rDelay:0.00038} :
+    AUDIO_DEPTH==='mid' ?
+      {lCut:1250, rCut:1380, lGain:0.72, rGain:0.7, lDelay:0.00018, rDelay:0.00052} :
+      {lCut:820, rCut:940, lGain:0.54, rGain:0.52, lDelay:0.00024, rDelay:0.00064};
+  setAudioParam(roarAirStereoNodes.lDelay.delayTime, shape.lDelay, ramp);
+  setAudioParam(roarAirStereoNodes.rDelay.delayTime, shape.rDelay, ramp);
+  setAudioParam(roarAirStereoNodes.lFilter.frequency, shape.lCut, ramp);
+  setAudioParam(roarAirStereoNodes.rFilter.frequency, shape.rCut, ramp);
+  setAudioParam(roarAirStereoNodes.lGain.gain, shape.lGain, ramp);
+  setAudioParam(roarAirStereoNodes.rGain.gain, shape.rGain, ramp);
   setAudioParam(roarAirStereoNodes.erLDelay.delayTime, cfg.earlyL, ramp);
   setAudioParam(roarAirStereoNodes.erRDelay.delayTime, cfg.earlyR, ramp);
   setAudioParam(roarAirStereoNodes.erLFilter.frequency, cfg.earlyCut*0.85, ramp);
@@ -1835,7 +1841,7 @@ function connectRoarAirStereo(){
   rFilter.Q.value=0.45;
   erLFilter.type='lowpass';
   erRFilter.type='lowpass';
-  roarAirStereoNodes={lFilter,rFilter,lGain,rGain,erLDelay,erRDelay,erLFilter,erRFilter,erLGain,erRGain};
+  roarAirStereoNodes={lDelay,rDelay,lFilter,rFilter,lGain,rGain,erLDelay,erRDelay,erLFilter,erRFilter,erLGain,erRGain};
   updateRoarAirStereoShape(0);
 
   roarAirBus.connect(lGain).connect(lDelay).connect(lFilter).connect(merger,0,0);
