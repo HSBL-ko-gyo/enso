@@ -1754,10 +1754,10 @@ const AUDIO_DEPTH_SETTINGS = {
     roarAirDry:0.36, roarAirStereo:0.46, earlyGain:0.075, earlyL:0.025, earlyR:0.037, earlyCut:3900
   },
   far:{
-    xRange:0.62, yMin:-0.75, yMax:-0.35, zMin:-9.0, zMax:-6.0, maxDelay:0.00038,
-    distanceRef:1.35, attenMin:0.28, attenMax:0.46, closeCut:2300, farCut:1400,
-    crackleDry:0.06, crackleSpatial:0.5, popLevel:0.58,
-    roarAirDry:0.22, roarAirStereo:0.42, earlyGain:0.14, earlyL:0.04, earlyR:0.058, earlyCut:2400
+    xRange:0.56, yMin:-0.62, yMax:-0.28, zMin:-6.0, zMax:-4.0, maxDelay:0.00045,
+    distanceRef:1.4, attenMin:0.4, attenMax:0.58, closeCut:3000, farCut:1700,
+    crackleDry:0.09, crackleSpatial:0.52, popLevel:0.66,
+    roarAirDry:0.26, roarAirStereo:0.46, earlyGain:0.12, earlyL:0.034, earlyR:0.05, earlyCut:3000
   }
 };
 let AUDIO_DEPTH_CONFIG = AUDIO_DEPTH_SETTINGS[AUDIO_DEPTH];
@@ -1803,7 +1803,7 @@ function updateRoarAirStereoShape(ramp=0.28){
     {lCut:1550, rCut:1680, lGain:0.76, rGain:0.74, lDelay:0.00012, rDelay:0.00038} :
     AUDIO_DEPTH==='mid' ?
       {lCut:950, rCut:1080, lGain:0.62, rGain:0.6, lDelay:0.0002, rDelay:0.00056} :
-      {lCut:560, rCut:660, lGain:0.42, rGain:0.4, lDelay:0.00028, rDelay:0.0007};
+      {lCut:680, rCut:800, lGain:0.5, rGain:0.48, lDelay:0.00026, rDelay:0.00066};
   setAudioParam(roarAirStereoNodes.lDelay.delayTime, shape.lDelay, ramp);
   setAudioParam(roarAirStereoNodes.rDelay.delayTime, shape.rDelay, ramp);
   setAudioParam(roarAirStereoNodes.lFilter.frequency, shape.lCut, ramp);
