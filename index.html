@@ -1763,6 +1763,7 @@ const AUDIO_DEPTH_SETTINGS = {
 let AUDIO_DEPTH_CONFIG = AUDIO_DEPTH_SETTINGS[AUDIO_DEPTH];
 const CRACKLE_SCHEDULE_AHEAD=6.0;
 const CRACKLE_SCHEDULER_INTERVAL=1000;
+const CRACKLE_TAIL_CLEANUP_MS=180;
 /* Future: pop generation and virtual mic math could move to AudioWorklet for stronger background stability. */
 function clamp(v,min,max){return Math.max(min, Math.min(max, v))}
 function randRange(min,max){return min+Math.random()*(max-min)}
@@ -1902,7 +1903,7 @@ function setSpatialMode(nextMode, persist=true){
   updateSpatialButton();
   applySpatialMode();
   if(audioOn && actx && actx.state==='running'){
-    stopScheduledCrackles();
+    stopScheduledCrackles(true);
     nextCrackleTime=actx.currentTime+0.05;
     scheduleCrackleAhead();
   }
@@ -1990,6 +1991,7 @@ function connectVirtualCrackle(source, x, y, z){
 function cleanupCrackle(entry){
   if(!entry || !scheduledCrackles.has(entry)) return;
   scheduledCrackles.delete(entry);
+  clearTimeout(entry.cleanupTimer);
   try{
     entry.source.disconnect();
     entry.bp.disconnect();
@@ -1997,11 +1999,32 @@ function cleanupCrackle(entry){
     entry.nodes.forEach(n=>n.disconnect());
   }catch(_){}
 }
-function stopScheduledCrackles(){
+function stopCrackleEntry(entry, fade=false){
+  if(!actx || !entry || !scheduledCrackles.has(entry)) return;
+  const now=actx.currentTime;
+  if(fade && entry.startTime<=now && now<entry.startTime+entry.duration+0.08){
+    try{
+      if(entry.gain.gain.cancelAndHoldAtTime){
+        entry.gain.gain.cancelAndHoldAtTime(now);
+      }else{
+        const current=entry.gain.gain.value;
+        entry.gain.gain.cancelScheduledValues(now);
+        entry.gain.gain.setValueAtTime(current, now);
+      }
+      entry.gain.gain.linearRampToValueAtTime(0, now+0.035);
+      entry.source.stop(now+0.05);
+    }catch(_){}
+    clearTimeout(entry.cleanupTimer);
+    entry.cleanupTimer=setTimeout(()=>cleanupCrackle(entry), CRACKLE_TAIL_CLEANUP_MS);
+  }else{
+    try{ entry.source.stop(now); }catch(_){}
+    cleanupCrackle(entry);
+  }
+}
+function stopScheduledCrackles(fade=false){
   if(!actx) return;
   for(const entry of [...scheduledCrackles]){
-    try{ entry.source.stop(actx.currentTime); }catch(_){}
-    cleanupCrackle(entry);
+    stopCrackleEntry(entry, fade);
   }
 }
 function initAudio(){
@@ -2052,7 +2075,11 @@ function pop(time, loud){
   const n=actx.sampleRate*0.03;
   const b=actx.createBuffer(1,n,actx.sampleRate);
   const d=b.getChannelData(0);
-  for(let i=0;i<n;i++) d[i]=(Math.random()*2-1)*Math.pow(1-i/n,2.5);
+  const attack=Math.max(1, Math.floor(actx.sampleRate*0.0025));
+  for(let i=0;i<n;i++){
+    const a=i<attack ? i/attack : 1;
+    d[i]=(Math.random()*2-1)*a*Math.pow(1-i/n,2.5);
+  }
   o.buffer=b;
   const bp=actx.createBiquadFilter();
   bp.type='bandpass';
@@ -2060,7 +2087,13 @@ function pop(time, loud){
   bp.Q.value=1.2;
   const g=actx.createGain();
   const popLevel = spatialOn ? AUDIO_DEPTH_CONFIG.popLevel : 1;
-  g.gain.value=(loud?0.45:0.1+Math.random()*0.2)*popLevel;
+  const level=(loud?0.45:0.1+Math.random()*0.2)*popLevel;
+  const startTime=Number.isFinite(time) ? time : actx.currentTime;
+  const duration=n/actx.sampleRate;
+  g.gain.setValueAtTime(0, Math.max(actx.currentTime, startTime-0.004));
+  g.gain.linearRampToValueAtTime(level, startTime+0.004);
+  g.gain.setValueAtTime(level, startTime+duration*0.55);
+  g.gain.linearRampToValueAtTime(0, startTime+duration);
   o.connect(bp).connect(g).connect(crackleBus);
   const micNodes=connectVirtualCrackle(
     g,
@@ -2068,10 +2101,13 @@ function pop(time, loud){
     randRange(AUDIO_DEPTH_CONFIG.yMin,AUDIO_DEPTH_CONFIG.yMax),
     randRange(AUDIO_DEPTH_CONFIG.zMin,AUDIO_DEPTH_CONFIG.zMax)
   );
-  const entry={source:o,bp,gain:g,nodes:micNodes};
+  const entry={source:o,bp,gain:g,nodes:micNodes,startTime,duration,cleanupTimer:null};
   scheduledCrackles.add(entry);
-  o.addEventListener('ended',()=>cleanupCrackle(entry));
-  o.start(time);
+  o.addEventListener('ended',()=>{
+    clearTimeout(entry.cleanupTimer);
+    entry.cleanupTimer=setTimeout(()=>cleanupCrackle(entry), CRACKLE_TAIL_CLEANUP_MS);
+  });
+  o.start(startTime);
 }
 function thud(){
   if(!actx)return;
