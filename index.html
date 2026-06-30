@@ -204,7 +204,7 @@
     </div>
     <div class="controls">
       <button class="btn" id="file">ファイルを燃やす</button>
-      <button class="btn" id="auto" aria-pressed="false">自動でくべる OFF</button>
+      <button class="btn" id="auto" aria-pressed="true">自動でくべる ON</button>
       <button class="btn" id="star" aria-pressed="true">星 ON</button>
       <button class="btn" id="sound" aria-pressed="false">音 OFF</button>
       <button class="btn" id="spatial" aria-pressed="true" aria-label="焚き火音の距離を切り替える">立体音 遠</button>
@@ -1501,7 +1501,7 @@ function drawGlow(){
 }
 
 /* ---------- 自動でくべる ---------- */
-let autoStoke=false;
+let autoStoke=true;
 let nextAutoStoke=0;
 function canAutoStoke(){
   return logs.filter(l=>l.burn<1).length < MAX_LOGS &&
